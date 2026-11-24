@@ -1,0 +1,29 @@
+{
+  "name": "openbot",
+  "version": "0.1.0",
+  "description": "Named, configurable bots for opencode: agent + working directory + skills + MCP, packaged as one exportable entity.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": false,
+  "keywords": ["opencode", "opencode-plugin", "agent", "bot"],
+  "repository": { "type": "git", "url": "git+https://github.com/technostik/openbot.git" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "docs"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "test:e2e": "npm run build && node test/e2e/run.mjs"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.4.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

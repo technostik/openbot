@@ -1,0 +1,127 @@
+/**
+ * Translation of a BotConfig into opencode primitives (agent, permissions,
+ * skills, MCP servers). Pure functions over the host's "editor" objects so
+ * they can be unit-tested with plain stand-ins.
+ */
+import { loadLocalSkills } from "./skills.js";
+export const newOwned = () => ({ agents: new Set(), mcps: new Set(), skills: new Set() });
+export function parseModelRef(model) {
+    const [ref, variant] = model.split("#");
+    const slash = ref.indexOf("/");
+    return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1), ...(variant ? { variant } : {}) };
+}
+/** The system prompt: a short standard preamble + the user's master prompt. */
+export function composeSystem(bot) {
+    const lines = [
+        `You are "${bot.name}", a persistent bot running inside opencode (openbot).`,
+        ...(bot.description ? [`Purpose: ${bot.description}`] : []),
+        `Your working directory is ${bot.workdir}. Keep your files and notes there.`,
+        `You can read and change your own configuration with the bot_get and bot_update tools, and talk to other bots with bot_say.`,
+        "",
+        "## Your instructions",
+        bot.instructions,
+    ];
+    return lines.join("\n");
+}
+/** Name used for a bot-owned MCP server in the host (namespaced to avoid clashes). */
+export const mcpHostName = (bot, server) => `${bot}-${server}`;
+/** Id used for a bot-owned skill in the host. */
+export const skillHostId = (bot, skill) => `${bot}.${skill}`;
+/**
+ * Skill allowlist as permission rules (later rules win). The host matches the
+ * rule's resource against the skill *id*, so the bot's own skills (id
+ * "<bot>.<name>") are allowed by id as well as by name.
+ */
+export function skillRules(bot, localSkillNames) {
+    if (bot.skills === undefined)
+        return [];
+    const allowed = new Set([...bot.skills, ...localSkillNames, ...localSkillNames.map((n) => skillHostId(bot.name, n))]);
+    return [
+        { action: "skill", resource: "*", effect: "deny" },
+        ...[...allowed].map((name) => ({ action: "skill", resource: name, effect: "allow" })),
+    ];
+}
+/** Registers one agent per bot; retracts agents of bots that no longer exist. */
+export function applyAgents(editor, bots, owned, env) {
+    const log = env.log ?? (() => { });
+    const wanted = new Set(bots.map((b) => b.name));
+    for (const id of [...owned.agents]) {
+        if (!wanted.has(id)) {
+            editor.remove(id);
+            owned.agents.delete(id);
+        }
+    }
+    for (const bot of bots) {
+        if (!owned.agents.has(bot.name) && editor.get(bot.name)) {
+            log(`skipping bot "${bot.name}": an agent with that id already exists`);
+            continue;
+        }
+        const local = loadLocalSkills(env.skillsDir(bot.name)).map((s) => s.name);
+        editor.update(bot.name, (a) => {
+            a.name = bot.name;
+            if (bot.description)
+                a.description = bot.description;
+            else
+                delete a.description;
+            a.system = composeSystem(bot);
+            a.mode = "all";
+            a.hidden = false;
+            if (bot.model)
+                a.model = parseModelRef(bot.model);
+            else
+                delete a.model;
+            a.permissions = [...(a.permissions ?? []), ...skillRules(bot, local)];
+        });
+        owned.agents.add(bot.name);
+    }
+}
+const quiet = (fn) => {
+    try {
+        fn();
+    }
+    catch {
+        /* removing something absent is fine */
+    }
+};
+const botsHere = (location, bots) => bots.filter((b) => b.workdir === location);
+/**
+ * Bot-owned MCP servers are registered only in the opencode instance whose
+ * directory is the bot's workdir: that is where the bot's sessions run, and
+ * it avoids spawning every bot's servers in every instance.
+ */
+export function applyWorkdirMcp(location, bots, mcp, owned) {
+    const want = new Map();
+    for (const bot of botsHere(location, bots)) {
+        for (const [server, cfg] of Object.entries(bot.mcps ?? {}))
+            want.set(mcpHostName(bot.name, server), cfg);
+    }
+    for (const name of [...owned.mcps])
+        if (!want.has(name)) {
+            quiet(() => mcp.remove(name));
+            owned.mcps.delete(name);
+        }
+    for (const [name, cfg] of want) {
+        mcp.set(name, cfg);
+        owned.mcps.add(name);
+    }
+}
+/** Same scoping for the skills that ship inside a bot (`<botdir>/skills`). */
+export function applyWorkdirSkills(location, bots, skills, owned, env) {
+    const want = new Map();
+    for (const bot of botsHere(location, bots)) {
+        for (const s of loadLocalSkills(env.skillsDir(bot.name))) {
+            const id = skillHostId(bot.name, s.name);
+            want.set(id, { id, name: s.name, description: s.description, path: s.path, content: s.content });
+        }
+    }
+    for (const id of [...owned.skills])
+        if (!want.has(id)) {
+            quiet(() => skills.remove(id));
+            owned.skills.delete(id);
+        }
+    for (const [id, s] of want) {
+        quiet(() => skills.remove(id));
+        skills.add(s);
+        owned.skills.add(id);
+    }
+}
