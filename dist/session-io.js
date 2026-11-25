@@ -37,35 +37,62 @@ export function summarizeMessages(messages, limit, maxChars = 400) {
         return { type: String(m?.type ?? "unknown"), at };
     });
 }
-/** Returns the id of the bot's live session, creating one in its workdir if needed. */
+/** The thread key for a caller: its own conversation, or "main" when there is none. */
+export const threadKey = (callerSessionID) => callerSessionID || "main";
+/**
+ * Returns the id of the bot's conversation for this caller, creating it in the
+ * bot's workdir if needed. The conversation is created as a child of the
+ * calling session so it appears under it in the UI.
+ */
 export async function ensureSession(port, store, bot, opts = {}) {
-    const state = store.readState(bot.name);
-    if (state.sessionID && !opts.fresh) {
+    const key = opts.key ?? threadKey(opts.callerSessionID);
+    const existing = store.readThreads(bot.name)[key];
+    if (existing && !opts.fresh) {
         try {
-            const s = await port.get({ sessionID: state.sessionID });
-            const dir = s?.location?.directory;
+            const s = await port.get({ sessionID: existing.sessionID });
+            // A child session reports its old location until it next runs, so trust what we recorded at creation.
+            const dir = existing.workdir ?? s?.location?.directory;
             if (!dir || dir === bot.workdir)
-                return state.sessionID;
+                return { sessionID: existing.sessionID, key, created: false, parented: Boolean(s?.parentID) };
         }
         catch {
             /* session was deleted: fall through and create a new one */
         }
     }
-    const s = await port.create({
+    const base = {
         agent: bot.name,
         title: `bot:${bot.name}`,
         location: { directory: bot.workdir },
-        metadata: { openbot: { bot: bot.name } },
-    });
-    store.writeState(bot.name, { sessionID: s.id, sessionCreatedAt: new Date().toISOString() });
-    return s.id;
+        metadata: { openbot: { bot: bot.name, thread: key, ...(opts.callerSessionID ? { parent: opts.callerSessionID } : {}) } },
+    };
+    let s;
+    let parented = false;
+    if (opts.callerSessionID) {
+        try {
+            // The host puts a child session in its parent's directory, so move it to the bot's workdir
+            // before its first run: it then appears under the caller AND works in the bot's own directory.
+            s = await port.create({ ...base, parentID: opts.callerSessionID });
+            parented = true;
+            await port.move?.({ sessionID: s.id, directory: bot.workdir });
+        }
+        catch {
+            if (!parented)
+                s = undefined; // the host refused the parent: fall back to a standalone session
+        }
+    }
+    if (!s)
+        s = await port.create(base);
+    const now = new Date().toISOString();
+    store.setThread(bot.name, key, { sessionID: s.id, ...(opts.callerSessionID ? { parentID: opts.callerSessionID } : {}), workdir: bot.workdir, createdAt: now, lastAt: now });
+    return { sessionID: s.id, key, created: true, parented };
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function say(port, store, bot, message, opts = {}) {
-    const sessionID = await ensureSession(port, store, bot, { fresh: opts.fresh });
+    const { sessionID, key } = await ensureSession(port, store, bot, { fresh: opts.fresh, callerSessionID: opts.callerSessionID, key: opts.key });
     const sent = await port.prompt({ sessionID, text: message, delivery: "queue" });
+    store.touchThread(bot.name, key);
     if (opts.wait === false)
-        return { sessionID, status: "started", text: "" };
+        return { sessionID, thread: key, status: "started", text: "" };
     const deadline = Date.now() + (opts.timeoutMs ?? 300_000);
     const pollMs = opts.pollMs ?? 400;
     let aborted = false;
@@ -77,7 +104,7 @@ export async function say(port, store, bot, message, opts = {}) {
     try {
         while (Date.now() < deadline) {
             if (aborted)
-                return { sessionID, status: "interrupted", text: "" };
+                return { sessionID, thread: key, status: "interrupted", text: "" };
             const left = deadline - Date.now();
             await Promise.race([port.wait({ sessionID }).catch(() => { }), sleep(Math.min(left, 5_000))]);
             const reply = extractReply(await port.context({ sessionID }), sent.id);
@@ -85,6 +112,7 @@ export async function say(port, store, bot, message, opts = {}) {
                 const failed = reply.outcome === "failed";
                 return {
                     sessionID,
+                    thread: key,
                     status: failed ? "failed" : "done",
                     text: reply.text,
                     steps: reply.steps,
@@ -93,7 +121,7 @@ export async function say(port, store, bot, message, opts = {}) {
             }
             await sleep(pollMs);
         }
-        return { sessionID, status: "timeout", text: "" };
+        return { sessionID, thread: key, status: "timeout", text: "" };
     }
     finally {
         opts.signal?.removeEventListener("abort", onAbort);

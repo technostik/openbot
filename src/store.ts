@@ -10,6 +10,8 @@ import {
   type BotPatch,
   type BotState,
   type McpServerConfig,
+  type ThreadInfo,
+  type Threads,
 } from "./types.js"
 
 const MODEL_RE = /^[^/\s#]+\/[^\s#]+(#[^\s#]+)?$/
@@ -113,6 +115,13 @@ export class BotStore {
   private statePath(name: string): string {
     return path.join(this.botDir(name), "state", "session.json")
   }
+  private threadsPath(name: string): string {
+    return path.join(this.botDir(name), "state", "threads.json")
+  }
+  /** The master prompt, as a plain markdown file anyone (user or bot) can edit. */
+  systemPath(name: string): string {
+    return path.join(this.botDir(name), "system.md")
+  }
   skillsDir(name: string): string {
     return path.join(this.botDir(name), "skills")
   }
@@ -178,7 +187,14 @@ export class BotStore {
     for (const name of entries.sort()) {
       try {
         const st = fs.statSync(path.join(this.botsDir, name, "bot.json"))
-        parts.push(`${name}:${st.mtimeMs}:${st.size}`)
+        let sys = ""
+        try {
+          const ss = fs.statSync(path.join(this.botsDir, name, "system.md"))
+          sys = `:${ss.mtimeMs}:${ss.size}`
+        } catch {
+          /* legacy bot without system.md */
+        }
+        parts.push(`${name}:${st.mtimeMs}:${st.size}${sys}`)
       } catch {
         /* not a bot directory */
       }
@@ -248,16 +264,78 @@ export class BotStore {
     return bot
   }
 
-  /** Writes a fully-formed config (used by create/update/import). */
+  /**
+   * Writes a fully-formed bot: the master prompt goes to system.md, everything
+   * else to bot.json (so each file is pleasant to edit by hand).
+   */
   write(bot: BotConfig): void {
-    const file = this.configPath(bot.name)
-    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const dir = this.botDir(bot.name)
+    fs.mkdirSync(dir, { recursive: true })
+    const { instructions, ...config } = bot
+    this.atomicWrite(this.systemPath(bot.name), instructions.trimEnd() + "\n")
+    this.atomicWrite(this.configPath(bot.name), JSON.stringify(config, null, 2) + "\n")
+  }
+
+  private atomicWrite(file: string, content: string): void {
     const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
-    fs.writeFileSync(tmp, JSON.stringify(bot, null, 2) + "\n", "utf8")
+    fs.writeFileSync(tmp, content, "utf8")
     fs.renameSync(tmp, file)
   }
 
-  /* ---- runtime state ---- */
+  /** Moves v0.1 bots (instructions inside bot.json) to the system.md layout. */
+  migrate(): string[] {
+    const migrated: string[] = []
+    for (const bot of this.list()) {
+      if (!fs.existsSync(this.systemPath(bot.name))) {
+        this.write(bot)
+        migrated.push(bot.name)
+      }
+    }
+    return migrated
+  }
+
+  /* ---- conversations (threads) ---- */
+
+  readThreads(name: string): Threads {
+    let threads: Threads = {}
+    try {
+      threads = (JSON.parse(fs.readFileSync(this.threadsPath(name), "utf8")) as { threads?: Threads }).threads ?? {}
+    } catch {
+      /* none yet */
+    }
+    const legacy = this.readState(name)
+    if (legacy.sessionID && !threads.main) {
+      const at = legacy.sessionCreatedAt ?? new Date(0).toISOString()
+      threads = { ...threads, main: { sessionID: legacy.sessionID, createdAt: at, lastAt: at } }
+    }
+    return threads
+  }
+
+  setThread(name: string, key: string, info: ThreadInfo): void {
+    const threads = { ...this.readThreads(name), [key]: info }
+    const file = this.threadsPath(name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    this.atomicWrite(file, JSON.stringify({ threads }, null, 2) + "\n")
+  }
+
+  touchThread(name: string, key: string): void {
+    const t = this.readThreads(name)[key]
+    if (t) this.setThread(name, key, { ...t, lastAt: new Date().toISOString() })
+  }
+
+  /** Is this session one of the bot's own conversations? */
+  isBotSession(name: string, sessionID: string): boolean {
+    return Object.values(this.readThreads(name)).some((t) => t.sessionID === sessionID)
+  }
+
+  /** Threads, most recently used first. */
+  listThreads(name: string): Array<ThreadInfo & { key: string }> {
+    return Object.entries(this.readThreads(name))
+      .map(([key, t]) => ({ key, ...t }))
+      .sort((a, b) => b.lastAt.localeCompare(a.lastAt))
+  }
+
+  /* ---- legacy runtime state ---- */
 
   readState(name: string): BotState {
     try {
@@ -290,10 +368,16 @@ export class BotStore {
       throw new BotError(`bot.json uses schema ${j.schema}, newer than this openbot (${SCHEMA_VERSION}). Update openbot.`)
     }
     const now = new Date().toISOString()
+    let fromFile: string | undefined
+    try {
+      fromFile = fs.readFileSync(this.systemPath(expectedName), "utf8").trim() || undefined
+    } catch {
+      /* legacy bot: instructions live in bot.json */
+    }
     const bot: BotConfig = {
       schema: SCHEMA_VERSION,
       name: expectedName,
-      instructions: validateInstructions(j.instructions),
+      instructions: validateInstructions(fromFile ?? j.instructions),
       workdir: j.workdir !== undefined ? validateWorkdir(j.workdir) : this.defaultWorkdir(expectedName),
       createdAt: typeof j.createdAt === "string" ? j.createdAt : now,
       updatedAt: typeof j.updatedAt === "string" ? j.updatedAt : now,

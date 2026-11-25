@@ -3,10 +3,20 @@
  * configure, inspect and talk to bots. All are native tools (not Code Mode),
  * so any model can call them directly.
  */
-import { exportToFile, importFromFile } from "./bundle.js";
-import { ensureSession, say, summarizeMessages } from "./session-io.js";
+import { exportToFile } from "./bundle.js";
+import { listTree, readInside, renderTree } from "./files.js";
+import { inspectMaterialized, agentFilePath } from "./materialize.js";
+import { say, summarizeMessages } from "./session-io.js";
+import { createBot, deleteBot, importBot, materializeEnv, updateBot } from "./service.js";
 import { BotError } from "./types.js";
 import { expandPath } from "./paths.js";
+/** Turns host errors into something that tells the user what to do. */
+export function explainError(message) {
+    if (/Agent not found/i.test(message)) {
+        return `${message}\nThe bot's agent is unknown in its working directory. openbot normally writes <workdir>/.opencode/agents/<bot>.md there; make sure the plugin option materialize is not false, then /reload. (Enable the debug option and run bot_diagnose for details.)`;
+    }
+    return message;
+}
 /** Bots currently blocked waiting on another bot: used to refuse call cycles. */
 const waiting = new Set();
 const MCP_SCHEMA = {
@@ -19,6 +29,9 @@ function publicView(bot, store) {
     return {
         ...bot,
         dir: store.botDir(bot.name),
+        systemPromptFile: store.systemPath(bot.name),
+        agentFile: agentFilePath(bot),
+        agentFileState: inspectMaterialized(bot, materializeEnv(store)),
         mcps: bot.mcps
             ? Object.fromEntries(Object.entries(bot.mcps).map(([k, v]) => [k, v.type === "local" ? { type: "local", command: v.command } : { type: "remote", url: v.url }]))
             : undefined,
@@ -27,7 +40,7 @@ function publicView(bot, store) {
 const text = (content, metadata) => ({ content, ...(metadata ? { metadata } : {}) });
 const json = (v) => text(JSON.stringify(v, null, 2));
 export function buildTools(deps) {
-    const { store, session } = deps;
+    const { store, session, service } = deps;
     const isBot = (agent) => store.exists(agent);
     /** Resolves whom a call targets: explicit name, or the calling bot itself. */
     function target(input, ctx) {
@@ -53,7 +66,7 @@ export function buildTools(deps) {
         catch (e) {
             if (e instanceof BotError)
                 return text(`Error: ${e.message}`, { error: true });
-            return text(`Error: ${e.message ?? String(e)}`, { error: true });
+            return text(`Error: ${explainError(e.message ?? String(e))}`, { error: true });
         }
     };
     const tools = [
@@ -77,18 +90,19 @@ export function buildTools(deps) {
             options: { codemode: false },
             execute: wrap(async (input, ctx) => {
                 const bot = store.require(target(input, ctx));
-                const state = store.readState(bot.name);
-                let conversation = { sessionID: null };
-                if (state.sessionID) {
+                const threads = store.listThreads(bot.name);
+                let tokens, cost;
+                if (threads[0]) {
                     try {
-                        const s = await session.get({ sessionID: state.sessionID });
-                        conversation = { sessionID: s.id, title: s.title, directory: s.location?.directory, tokens: s.tokens, cost: s.cost, updated: s.time?.updated };
+                        const sess = await session.get({ sessionID: threads[0].sessionID });
+                        tokens = sess.tokens;
+                        cost = sess.cost;
                     }
                     catch {
-                        conversation = { sessionID: state.sessionID, note: "session no longer exists; a new one is created on next message" };
+                        /* last session no longer exists */
                     }
                 }
-                return json({ ...publicView(bot, store), conversation });
+                return json({ ...publicView(bot, store), conversations: { count: threads.length, latest: threads[0]?.sessionID ?? null, latestTokens: tokens, latestCost: cost } });
             }),
         },
         {
@@ -110,9 +124,9 @@ export function buildTools(deps) {
             options: { codemode: false },
             execute: wrap(async (input, ctx) => {
                 requireHuman(ctx, "create other bots");
-                const bot = store.create({ ...input, ...(input.workdir ? { workdir: expandPath(input.workdir) } : {}) });
+                const bot = createBot(service, { ...input, ...(input.workdir ? { workdir: expandPath(input.workdir) } : {}) });
                 await deps.reload();
-                return text(`Bot "${bot.name}" created.\nworkdir: ${bot.workdir}\nmodel: ${bot.model ?? "(default)"}\nTalk to it with @${bot.name} or the bot_say tool; change it with bot_update.`, { bot: bot.name });
+                return text(`Bot "${bot.name}" created.\nworkdir: ${bot.workdir}\nmodel: ${bot.model ?? "(default)"}\nmaster prompt (editable): ${store.systemPath(bot.name)}\nTalk to it with @${bot.name} or the bot_say tool; change it with bot_update.`, { bot: bot.name });
             }),
         },
         {
@@ -140,8 +154,7 @@ export function buildTools(deps) {
                     throw new BotError("Nothing to change: pass at least one field.");
                 if (patch.workdir)
                     patch.workdir = expandPath(patch.workdir);
-                const before = store.require(name);
-                const bot = store.update(name, patch);
+                const { bot, before } = updateBot(service, name, patch);
                 await deps.reload();
                 const changed = Object.keys(patch);
                 const note = patch.workdir && patch.workdir !== before.workdir ? " Its working directory changed, so its next message starts a new conversation." : "";
@@ -161,20 +174,20 @@ export function buildTools(deps) {
                 requireHuman(ctx, "delete bots");
                 if (input.confirm !== true)
                     throw new BotError("Refusing to delete without confirm: true.");
-                const bot = store.delete(input.name);
+                const bot = deleteBot(service, input.name);
                 await deps.reload();
                 return text(`Bot "${bot.name}" deleted. Its working directory ${bot.workdir} was not touched.`);
             }),
         },
         {
             name: "bot_say",
-            description: "Send a message to a bot and get its answer. The bot works in its own working directory, in its own persistent conversation (it remembers earlier messages). Use wait:false to let it work in the background.",
+            description: "Send a message to a bot. The bot works in its own working directory, in its own conversation (shown as a child session of this one; it remembers earlier messages) and with its own model. By default it works in the background and its answer arrives later as a background result; tell the user it was handed over. Use wait:true only if you must have the answer before continuing.",
             input: {
                 type: "object",
                 properties: {
                     name: str("Bot to talk to"),
                     message: str("What to tell the bot"),
-                    wait: { type: "boolean", description: "Wait for the answer (default true). false = fire and forget." },
+                    wait: { type: "boolean", description: "true = block until the bot answers. Default false: the bot works in the background and its answer is delivered to you automatically as a background result when it finishes." },
                     timeout_seconds: { type: "number", description: "Max seconds to wait (default 300)" },
                     new_conversation: { type: "boolean", description: "Start a fresh conversation instead of continuing" },
                 },
@@ -190,22 +203,25 @@ export function buildTools(deps) {
                     throw new BotError("A bot cannot send messages to itself.");
                 if (waiting.has(bot.name))
                     throw new BotError(`"${bot.name}" is waiting on another bot: refusing a call cycle.`);
-                const wait = input.wait !== false;
+                // From a conversation the bot's session is a child of it, and opencode delivers its result back to the
+                // caller as a background result (like a native subagent): so do not block unless asked to.
+                const wait = input.wait === undefined ? !ctx.sessionID : input.wait === true;
                 if (caller && wait)
                     waiting.add(caller);
                 try {
                     const r = await say(session, store, bot, input.message, {
                         wait,
                         fresh: input.new_conversation === true,
+                        callerSessionID: ctx.sessionID || undefined,
                         timeoutMs: (typeof input.timeout_seconds === "number" ? input.timeout_seconds : 300) * 1000,
                     });
-                    const meta = { bot: bot.name, sessionID: r.sessionID, status: r.status };
+                    const meta = { bot: bot.name, sessionID: r.sessionID, thread: r.thread, status: r.status };
                     if (r.status === "started")
-                        return text(`Message sent to ${bot.name}; it is working in the background (conversation ${r.sessionID}).`, meta);
+                        return text(`Message handed to ${bot.name}. It is working in the background in conversation ${r.sessionID}; its answer will arrive here automatically as a background result when it finishes. Tell the user it is in progress and continue; do not wait or poll.`, meta);
                     if (r.status === "timeout")
-                        return text(`${bot.name} is still working after the timeout. Check later with bot_history.`, meta);
+                        return text(`${bot.name} is still working after the timeout (conversation ${r.sessionID}). Check later with bot_history.`, meta);
                     if (r.status === "failed")
-                        return text(`${bot.name} failed: ${r.error}`, { ...meta, error: true });
+                        return text(`${bot.name} failed: ${explainError(r.error ?? "the run failed")}`, { ...meta, error: true });
                     return text(r.text || `(${bot.name} finished without a text answer; see bot_history)`, meta);
                 }
                 finally {
@@ -216,20 +232,86 @@ export function buildTools(deps) {
         },
         {
             name: "bot_history",
-            description: "Inspect a bot's recent conversation: what it was asked, what it answered, which tools it used.",
+            description: "Inspect a bot's recent conversation: what it was asked, what it answered, which tools it used. By default the conversation of the current session, else the most recent one.",
             input: {
                 type: "object",
-                properties: { name: str("Bot (omit for yourself)"), limit: { type: "number", description: "How many recent messages (default 12, max 50)" } },
+                properties: {
+                    name: str("Bot (omit for yourself)"),
+                    thread: str('Which conversation: a session id, "last" (most recent), or omit for the one linked to this session'),
+                    limit: { type: "number", description: "How many recent messages (default 12, max 50)" },
+                },
             },
             options: { codemode: false },
             execute: wrap(async (input, ctx) => {
                 const bot = store.require(target(input, ctx));
-                const sessionID = store.readState(bot.name).sessionID;
+                const threads = store.listThreads(bot.name);
+                let sessionID;
+                if (typeof input.thread === "string" && input.thread.startsWith("ses_"))
+                    sessionID = input.thread;
+                else if (input.thread === "last")
+                    sessionID = threads[0]?.sessionID;
+                else
+                    sessionID = store.readThreads(bot.name)[ctx.sessionID]?.sessionID ?? threads[0]?.sessionID;
                 if (!sessionID)
                     return text(`${bot.name} has no conversation yet.`);
                 const limit = Math.min(Math.max(Number(input.limit) || 12, 1), 50);
                 const items = summarizeMessages(await session.context({ sessionID }), limit);
                 return json({ bot: bot.name, sessionID, messages: items });
+            }),
+        },
+        {
+            name: "bot_conversations",
+            description: "List a bot's conversations (one per place it was used, shown as child sessions), with their session ids, where they were started, and usage. Use bot_history with a session id to read one.",
+            input: { type: "object", properties: { name: str("Bot (omit for yourself)") } },
+            options: { codemode: false },
+            execute: wrap(async (input, ctx) => {
+                const bot = store.require(target(input, ctx));
+                const known = store.listThreads(bot.name);
+                const rows = await Promise.all(known.map(async (t) => {
+                    let live;
+                    try {
+                        live = await session.get({ sessionID: t.sessionID });
+                    }
+                    catch {
+                        /* deleted */
+                    }
+                    return { thread: t.key, sessionID: t.sessionID, startedFrom: t.parentID ?? null, lastUsed: t.lastAt, exists: Boolean(live), tokens: live?.tokens, cost: live?.cost };
+                }));
+                const others = [];
+                if (session.list) {
+                    try {
+                        const r = await session.list({ directory: bot.workdir });
+                        const arr = Array.isArray(r) ? r : (r?.data ?? []);
+                        for (const s of arr)
+                            if (s.agent === bot.name && !known.some((k) => k.sessionID === s.id))
+                                others.push({ sessionID: s.id, title: s.title, parent: s.parentID ?? null });
+                    }
+                    catch {
+                        /* listing is best effort */
+                    }
+                }
+                return json({ bot: bot.name, conversations: rows, otherSessionsUsingThisBot: others });
+            }),
+        },
+        {
+            name: "bot_files",
+            description: "Inspect a bot's working directory: list its files, or read one text file (path relative to the working directory).",
+            input: {
+                type: "object",
+                properties: { name: str("Bot (omit for yourself)"), path: str("File to read, relative to the working directory (omit to list files)"), depth: { type: "number", description: "Listing depth (default 3)" } },
+            },
+            options: { codemode: false },
+            execute: wrap(async (input, ctx) => {
+                const bot = store.require(target(input, ctx));
+                if (typeof input.path === "string" && input.path) {
+                    const r = readInside(bot.workdir, input.path);
+                    if (!r.ok)
+                        throw new BotError(r.error);
+                    return text(r.content + (r.truncated ? "\n… (truncated)" : ""));
+                }
+                const depth = Math.min(Math.max(Number(input.depth) || 3, 1), 6);
+                const { entries } = listTree(bot.workdir, { depth });
+                return text(`${bot.workdir}\n${renderTree(bot.workdir, { depth })}\n(${entries.length} entries)`);
             }),
         },
         {
@@ -263,7 +345,7 @@ export function buildTools(deps) {
             options: { codemode: false },
             execute: wrap(async (input, ctx) => {
                 requireHuman(ctx, "import bots");
-                const { bot, warnings } = importFromFile(store, expandPath(input.path), {
+                const { bot, warnings } = importBot(service, { file: expandPath(input.path) }, {
                     rename: input.rename,
                     overwrite: input.overwrite === true,
                     workdir: input.workdir ? expandPath(input.workdir) : undefined,
@@ -275,4 +357,3 @@ export function buildTools(deps) {
     ];
     return tools;
 }
-export { ensureSession };

@@ -10,7 +10,8 @@
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": false,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"]
+    "types": ["node"],
+    "debug": true
   },
   "include": ["src/**/*.ts"]
 }

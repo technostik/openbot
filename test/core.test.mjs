@@ -10,6 +10,7 @@ import { applyAgents, applyWorkdirMcp, applyWorkdirSkills, newOwned, parseModelR
 import { extractReply, summarizeMessages, ensureSession, say } from "../dist/session-io.js"
 import { resolveRoot } from "../dist/paths.js"
 import { buildTools } from "../dist/tools.js"
+import { makeService } from "../dist/service.js"
 import { tmpdir } from "./helpers/tmp.mjs"
 
 const mk = () => new BotStore(tmpdir())
@@ -282,7 +283,7 @@ test("session-io: timeout when the bot never goes idle", async () => {
 
 /* ---- tools ---- */
 
-const toolMap = (store, port) => Object.fromEntries(buildTools({ store, session: port, reload: async () => { toolMap.reloads = (toolMap.reloads ?? 0) + 1 } }).map((t) => [t.name, t]))
+const toolMap = (store, port) => Object.fromEntries(buildTools({ store, service: makeService(store), session: port, reload: async () => { toolMap.reloads = (toolMap.reloads ?? 0) + 1 } }).map((t) => [t.name, t]))
 const human = { agent: "build", sessionID: "ses_h" }
 
 test("tools: create -> get -> update(self) -> say -> history -> export/import -> delete", async () => {
@@ -298,7 +299,7 @@ test("tools: create -> get -> update(self) -> say -> history -> export/import ->
   assert.match((await t.bot_get.execute({}, self)).content, /new role/)
   assert.match((await t.bot_update.execute({ name: "scout", model: "c/d" }, human)).content, /updated/)
   assert.match((await t.bot_update.execute({}, human)).content, /Error: Provide|Nothing/)
-  const said = await t.bot_say.execute({ name: "scout", message: "ping" }, human)
+  const said = await t.bot_say.execute({ name: "scout", message: "ping", wait: true }, human)
   assert.equal(said.content, "echo:ping"); assert.equal(said.metadata.status, "done")
   const hist = JSON.parse((await t.bot_history.execute({ name: "scout" }, human)).content)
   assert.equal(hist.messages.at(-1).type, "idle")
@@ -332,7 +333,7 @@ test("tools: a bot waiting on another is not called back (cycle guard)", async (
   s.create({ name: "alpha", instructions: "a" }); s.create({ name: "beta", instructions: "b" })
   let release; const gate = new Promise((r) => (release = r))
   const origPrompt = port.prompt; port.prompt = async (i) => { await gate; return origPrompt(i) }
-  const first = t.bot_say.execute({ name: "beta", message: "hi" }, { agent: "alpha", sessionID: "s1" }) // alpha now waits on beta
+  const first = t.bot_say.execute({ name: "beta", message: "hi", wait: true }, { agent: "alpha", sessionID: "s1" }) // alpha now waits on beta
   await new Promise((r) => setTimeout(r, 20))
   const back = await t.bot_say.execute({ name: "alpha", message: "callback" }, { agent: "beta", sessionID: "s2" })
   assert.match(back.content, /cycle/)

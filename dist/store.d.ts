@@ -1,4 +1,4 @@
-import { type BotConfig, type BotInput, type BotPatch, type BotState, type McpServerConfig } from "./types.js";
+import { type BotConfig, type BotInput, type BotPatch, type BotState, type McpServerConfig, type ThreadInfo, type Threads } from "./types.js";
 export declare function validateModel(model: unknown): string;
 export declare function validateSkills(skills: unknown): string[];
 export declare function validateMcps(mcps: unknown): Record<string, McpServerConfig>;
@@ -16,6 +16,9 @@ export declare class BotStore {
     botDir(name: string): string;
     private configPath;
     private statePath;
+    private threadsPath;
+    /** The master prompt, as a plain markdown file anyone (user or bot) can edit. */
+    systemPath(name: string): string;
     skillsDir(name: string): string;
     defaultWorkdir(name: string): string;
     exists(name: string): boolean;
@@ -29,8 +32,23 @@ export declare class BotStore {
     update(name: string, patch: BotPatch): BotConfig;
     /** Removes the bot's directory (config, state, local skills, default workspace). A custom workdir is never touched. */
     delete(name: string): BotConfig;
-    /** Writes a fully-formed config (used by create/update/import). */
+    /**
+     * Writes a fully-formed bot: the master prompt goes to system.md, everything
+     * else to bot.json (so each file is pleasant to edit by hand).
+     */
     write(bot: BotConfig): void;
+    private atomicWrite;
+    /** Moves v0.1 bots (instructions inside bot.json) to the system.md layout. */
+    migrate(): string[];
+    readThreads(name: string): Threads;
+    setThread(name: string, key: string, info: ThreadInfo): void;
+    touchThread(name: string, key: string): void;
+    /** Is this session one of the bot's own conversations? */
+    isBotSession(name: string, sessionID: string): boolean;
+    /** Threads, most recently used first. */
+    listThreads(name: string): Array<ThreadInfo & {
+        key: string;
+    }>;
     readState(name: string): BotState;
     writeState(name: string, patch: Partial<BotState> | null): BotState;
     parse(raw: string, expectedName: string): BotConfig;

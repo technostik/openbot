@@ -6,7 +6,13 @@
 import type { BotStore } from "./store.js";
 import type { BotConfig } from "./types.js";
 export interface SessionPort {
+    list?(input?: any): Promise<any>;
     create(input: any): Promise<any>;
+    /** Relocates a session to another directory (applies from its next run). */
+    move?(input: {
+        sessionID: string;
+        directory: string;
+    }): Promise<unknown>;
     get(input: {
         sessionID: string;
     }): Promise<any>;
@@ -43,22 +49,40 @@ export interface HistoryItem {
 }
 /** Compact, model-friendly view of the last `limit` messages. */
 export declare function summarizeMessages(messages: any[], limit: number, maxChars?: number): HistoryItem[];
-/** Returns the id of the bot's live session, creating one in its workdir if needed. */
+/** The thread key for a caller: its own conversation, or "main" when there is none. */
+export declare const threadKey: (callerSessionID?: string) => string;
+/**
+ * Returns the id of the bot's conversation for this caller, creating it in the
+ * bot's workdir if needed. The conversation is created as a child of the
+ * calling session so it appears under it in the UI.
+ */
 export declare function ensureSession(port: SessionPort, store: BotStore, bot: BotConfig, opts?: {
     fresh?: boolean;
-}): Promise<string>;
+    callerSessionID?: string;
+    key?: string;
+}): Promise<{
+    sessionID: string;
+    key: string;
+    created: boolean;
+    parented: boolean;
+}>;
 export interface SayOptions {
     /** Wait for the bot to finish and return its answer (default true). */
     wait?: boolean;
     timeoutMs?: number;
     /** Start a new conversation instead of continuing the existing one. */
     fresh?: boolean;
+    /** The conversation that is calling the bot (the bot's thread becomes its child). */
+    callerSessionID?: string;
+    /** Use this thread key instead of the caller's (e.g. "diagnose"). */
+    key?: string;
     /** Aborting interrupts the bot's current run. */
     signal?: AbortSignal;
     pollMs?: number;
 }
 export interface SayResult {
     sessionID: string;
+    thread: string;
     status: "started" | "done" | "failed" | "timeout" | "interrupted";
     text: string;
     error?: string;

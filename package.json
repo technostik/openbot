@@ -1,29 +1,67 @@
 {
   "name": "openbot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Named, configurable bots for opencode: agent + working directory + skills + MCP, packaged as one exportable entity.",
   "type": "module",
   "license": "UNLICENSED",
   "private": false,
-  "keywords": ["opencode", "opencode-plugin", "agent", "bot"],
-  "repository": { "type": "git", "url": "git+https://github.com/technostik/openbot.git" },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agent",
+    "bot"
+  ],
+  "options": { "debug": true },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/technostik/openbot.git"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./tui": "./src/tui.tsx"
   },
-  "files": ["dist", "README.md", "docs"],
-  "engines": { "node": ">=20" },
+  "files": [
+    "dist",
+    "src/tui.tsx",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/*.test.mjs",
-    "test:e2e": "npm run build && node test/e2e/run.mjs"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tui.json",
+    "test": "npm run build && npm run typecheck && node --test test/*.test.mjs",
+    "test:e2e": "npm run build && node test/e2e/run.mjs && node test/e2e/project-only.mjs && node test/e2e/debug-off.mjs",
+    "test:tui": "npm run build && node test/tui/run.mjs"
   },
   "devDependencies": {
     "@opencode/plugin": "2.4.1",
+    "@opencode/theme": "^2.4.1",
+    "@opentui/core": "^0.9.9",
+    "@opentui/solid": "^0.9.9",
     "@types/node": "^22.0.0",
+    "solid-js": "^1.9.20",
     "typescript": "^5.6.0"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.8.0",
+    "@opentui/solid": ">=0.8.0",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
   }
 }

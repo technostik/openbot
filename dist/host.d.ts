@@ -41,8 +41,11 @@ export declare function parseModelRef(model: string): {
     id: string;
     variant?: string;
 };
-/** The system prompt: a short standard preamble + the user's master prompt. */
-export declare function composeSystem(bot: BotConfig): string;
+/**
+ * The system prompt: a short standard preamble + the user's master prompt.
+ * `systemFile` is where the master prompt lives on disk, so the bot knows it can edit it.
+ */
+export declare function composeSystem(bot: BotConfig, systemFile?: string): string;
 /** Name used for a bot-owned MCP server in the host (namespaced to avoid clashes). */
 export declare const mcpHostName: (bot: string, server: string) => string;
 /** Id used for a bot-owned skill in the host. */
@@ -56,6 +59,8 @@ export declare function skillRules(bot: BotConfig, localSkillNames: string[]): P
 export interface ApplyEnv {
     /** Where a bot's own skills live on disk. */
     skillsDir: (bot: string) => string;
+    /** Where a bot's master prompt (system.md) lives on disk. */
+    systemFile?: (bot: string) => string;
     log?: (message: string) => void;
 }
 /** Registers one agent per bot; retracts agents of bots that no longer exist. */

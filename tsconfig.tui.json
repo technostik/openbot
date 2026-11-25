@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "jsx": "preserve", "jsxImportSource": "@opentui/solid", "noEmit": true, "rootDir": ".", "declaration": false },
+  "include": ["src/tui.tsx"]
+}

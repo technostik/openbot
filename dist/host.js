@@ -10,13 +10,19 @@ export function parseModelRef(model) {
     const slash = ref.indexOf("/");
     return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1), ...(variant ? { variant } : {}) };
 }
-/** The system prompt: a short standard preamble + the user's master prompt. */
-export function composeSystem(bot) {
+/**
+ * The system prompt: a short standard preamble + the user's master prompt.
+ * `systemFile` is where the master prompt lives on disk, so the bot knows it can edit it.
+ */
+export function composeSystem(bot, systemFile) {
     const lines = [
         `You are "${bot.name}", a persistent bot running inside opencode (openbot).`,
         ...(bot.description ? [`Purpose: ${bot.description}`] : []),
         `Your working directory is ${bot.workdir}. Keep your files and notes there.`,
         `You can read and change your own configuration with the bot_get and bot_update tools, and talk to other bots with bot_say.`,
+        ...(systemFile
+            ? [`Your master prompt (the "Your instructions" section below) is the file ${systemFile}. You may edit it to change your own behavior; edits apply from your next message.`]
+            : []),
         "",
         "## Your instructions",
         bot.instructions,
@@ -63,7 +69,7 @@ export function applyAgents(editor, bots, owned, env) {
                 a.description = bot.description;
             else
                 delete a.description;
-            a.system = composeSystem(bot);
+            a.system = composeSystem(bot, env.systemFile?.(bot.name));
             a.mode = "all";
             a.hidden = false;
             if (bot.model)

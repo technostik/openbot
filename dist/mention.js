@@ -26,7 +26,7 @@ export function delegationText(mention) {
     const body = mention.message || "(the user mentioned you without a message — greet them and ask what they need)";
     return [
         `[openbot] The user is addressing the bot "@${mention.bot}".`,
-        `Do not answer yourself. Call the bot_say tool with name "${mention.bot}" and the message below, then relay the bot's answer to the user.`,
+        `Do not answer yourself. Call the bot_say tool with name "${mention.bot}" and the message below. The bot works in the background; tell the user briefly that it was handed over, and relay the bot's answer when it arrives as a background result.`,
         "",
         `Message for @${mention.bot}:`,
         '"""',

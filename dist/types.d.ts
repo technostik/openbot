@@ -61,12 +61,26 @@ export interface BotPatch {
     mcps?: Record<string, McpServerConfig> | null;
     capabilities?: Record<string, unknown> | null;
 }
-/** Mutable per-bot runtime state, kept out of bot.json so config stays clean. */
+/** Legacy single-session state (v0.1). Still read, migrated into threads. */
 export interface BotState {
-    /** The bot's persistent conversation. */
     sessionID?: string;
     sessionCreatedAt?: string;
 }
+/**
+ * One conversation of a bot. A bot talks in one thread per calling conversation
+ * (so it shows up as a child session of where it is used) plus "main" for
+ * callers that have no conversation (automations, Telegram, ...).
+ */
+export interface ThreadInfo {
+    sessionID: string;
+    /** The conversation that called the bot, when there was one. */
+    parentID?: string;
+    /** The working directory this conversation was created for. */
+    workdir?: string;
+    createdAt: string;
+    lastAt: string;
+}
+export type Threads = Record<string, ThreadInfo>;
 export declare class BotError extends Error {
     constructor(message: string);
 }
