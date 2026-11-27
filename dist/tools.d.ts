@@ -1,3 +1,9 @@
+/**
+ * The bot_* tools: how users (through any agent) and bots themselves create,
+ * configure, inspect and talk to bots. All are native tools (not Code Mode),
+ * so any model can call them directly.
+ */
+import { type NativeAutomations, type ReconcileReport } from "./automation.js";
 import { type SessionPort } from "./session-io.js";
 import { type Service } from "./service.js";
 import type { BotStore } from "./store.js";
@@ -7,6 +13,11 @@ export interface ToolDeps {
     session: SessionPort;
     /** Re-applies bot definitions to the host after a change. */
     reload: () => Promise<void>;
+    /** Native opencode automations (absent when the host has none). */
+    automation?: {
+        native: NativeAutomations;
+        reconcile: () => Promise<ReconcileReport>;
+    };
 }
 /** Turns host errors into something that tells the user what to do. */
 export declare function explainError(message: string): string;

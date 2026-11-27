@@ -4,6 +4,7 @@
  * and only ever extended with optional fields.
  */
 export const SCHEMA_VERSION = 1;
+export const BOT_STATUSES = ["active", "stopped", "finished"];
 export class BotError extends Error {
     constructor(message) {
         super(message);

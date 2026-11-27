@@ -25,7 +25,7 @@ export async function startEnv(o) {
   for (const d of [dirs.project, dirs.scout, dirs.box, dirs.home, `${dirs.xdg}/config/opencode`]) fs.mkdirSync(d, { recursive: true })
   const mock = await startMock(o.mockPort)
   const provider = { mock: { name: "Mock", package: "@ai-sdk/openai-compatible", settings: { baseURL: mock.url, apiKey: "x" }, models: { "mock-1": { name: "Mock 1" } } } }
-  const pluginEntry = o.pluginOptions ? { package: repo, options: o.pluginOptions } : repo
+  const pluginEntry = o.pluginOptions ? { package: o.pluginEntry ?? repo, options: o.pluginOptions } : (o.pluginEntry ?? repo)
   fs.writeFileSync(`${dirs.xdg}/config/opencode/opencode.json`, JSON.stringify({ providers: provider, ...(o.pluginScope === "global" ? { plugins: [pluginEntry] } : {}) }, null, 2))
   if (o.pluginScope === "project") fs.writeFileSync(`${dirs.project}/opencode.json`, JSON.stringify({ plugins: [pluginEntry] }, null, 2))
   const env = { ...process.env, XDG_CONFIG_HOME: `${dirs.xdg}/config`, XDG_DATA_HOME: `${dirs.xdg}/data`, XDG_CACHE_HOME: `${dirs.xdg}/cache`, XDG_STATE_HOME: `${dirs.xdg}/state`, OPENBOT_HOME: dirs.home, ...(o.env ?? {}) }

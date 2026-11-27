@@ -1,7 +1,9 @@
-import { type BotConfig, type BotInput, type BotPatch, type BotState, type McpServerConfig, type ThreadInfo, type Threads } from "./types.js";
+import { type AutomationSpec, type BotStatus, type BotConfig, type BotInput, type BotPatch, type BotState, type McpServerConfig, type ThreadInfo, type Threads } from "./types.js";
 export declare function validateModel(model: unknown): string;
 export declare function validateSkills(skills: unknown): string[];
 export declare function validateMcps(mcps: unknown): Record<string, McpServerConfig>;
+/** Validates scheduled runs. The host needs prompt automations to be at least one minute apart. */
+export declare function validateAutomations(list: unknown): AutomationSpec[];
 export interface ListResult {
     bots: BotConfig[];
     problems: {
@@ -52,4 +54,13 @@ export declare class BotStore {
     readState(name: string): BotState;
     writeState(name: string, patch: Partial<BotState> | null): BotState;
     parse(raw: string, expectedName: string): BotConfig;
+    /** Changes the bot's lifecycle status (the only writer of status). */
+    setStatus(name: string, status: BotStatus, note?: string): BotConfig;
+    stateFile(name: string): string;
+    /** Creates state.md from the template when missing. */
+    ensureStateFile(bot: Pick<BotConfig, "name" | "description">): boolean;
+    readStateFile(name: string): string;
+    writeStateFile(name: string, content: string): void;
 }
+export declare const MAX_STATE_BYTES: number;
+export declare function stateTemplate(bot: Pick<BotConfig, "name" | "description">): string;

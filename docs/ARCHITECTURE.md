@@ -39,13 +39,30 @@ opencode primitives, which keeps the plugin thin and lets every later feature re
 - Plugin options: `{ "package": "...", "options": {...} }` in `plugins`; they reach the server plugin (`ctx.options`) and the TUI plugin (`context.options`). Plugin domains inside the server plugin only see their own directory; cross-directory checks use the client (TUI, tests).
 - TUI facts: a plugin's TSX is transpiled by the host; `theme.text.muted` is the muted color; the command palette does not open from inside a child-session view.
 
+## v0.3: autonomy, memory, reaching the user
+
+Design principle: **a bot is a loop (wake, read state, act, write state)** and every durable thing is a plain file.
+
+- **Automations are native opencode automations**, reconciled from `bot.json` (`automations`) and `status` by `src/automation.ts`. They are named `openbot:<bot>:<id>` so openbot never touches anyone else's. Stopped and finished bots simply have none (removal, not pausing: the plugin domain only exposes create/list/delete). Reconciliation is idempotent, runs at plugin start, on every `bot.json` change and after status/automation tools, and is serialized across opencode instances by a directory lock.
+- **Why prompts into the bot's own session, not a subagent**: a prompt automation targeting a subagent needs a parent session, and the child's result is delivered back to that parent as a background result, which would wake the bot a second time. Prompting the bot's automation conversation (created in its workdir) is one run per tick. A code action also needs a session, so a "script checks the state first" design is not possible.
+- **State** is `state.md`, injected into the system prompt on every turn through the `context` hook (`system.push({type:"text"})`), plus the `bot_state` tool (a tool, not file edits, because an unattended run must not stop on an `external_directory` permission prompt).
+- **History** is recorded when a bot's run ends (the `experimental.idle` hook, plus at the end of `bot_say`), incrementally by message-id cursor, so it survives compaction and session deletion.
+- **Reaching the user**: the native `question` tool already blocks the run and surfaces a form (`form.list`, answered with `session.form.reply`); `bot_notify` writes to `inbox.json`; the TUI watcher turns both into toasts, `attention.notify` (OS notification and sound) and the bell. Telegram will read the same inbox.
+
+Verified host facts for this version (real 2.4.1):
+- Automation `create` takes `{ sessionID, name, trigger, action }`; `to` defaults to that session; the directory is the session's. A prompt `every` must be at least 1 minute (code actions 15 seconds); durations are written "90 seconds", "5 minutes", "2 hours". `list` returns a plain array (unlike other list calls). Prompt automations fire on the server with no TUI open; the info carries `status`, `runCount`, `lastOutcome`, `nextDueAt`.
+- A `subagent`-targeted prompt and any code action require a session; `to: { session }` is the simple form.
+- The host's TUI shows a child session's `question` form inline in the parent conversation you have open (a stray Enter answers it), so the sidebar `?` badge and inbox matter mostly when you are elsewhere. Form fields: `{ key, title (short header), description (the question), options: [{ value, label, description }], custom }`; reply with `answer: { [key]: value }`.
+- `session.hook("experimental.idle")` gives `{ sessionID }` when a run ends; `session.hook("context")` exposes `system`, `agent`.
+- TUI: `ctx.attention.notify({ title, message, notification, sound })` (top level, not under `ui`), `ui.dialog.show(render)` + `dialog.set({ size })` for custom dialogs, `<scrollbox>` with `scrollBy/scrollTo`, `useKeyboard`. Inside a pseudo-terminal, escape-sequence keys (PgUp/PgDn/End) close the dialog instead of scrolling, so the viewer also answers to plain keys; the scroll box accelerates rapid key repeats.
+
 ## Roadmap, and why the PoC is already shaped for it
 
 1. **TUI**: done in v0.2 (Ctrl+P create/inspect, sidebar list, conversations, diagnose/report). Next: bot activity (busy/idle) and a stop button via `session.interrupt`, a usage column from session `tokens`/`cost`. For remote TUIs the plugin RPC (`./rpc`) would replace direct disk reads.
 2. **Budget**: sessions report `tokens` and `cost`; add `budget` to `bot.json`, sum per bot, `session.interrupt` when exceeded. `bot_get` already surfaces the numbers.
-3. **Automations**: do **not** build a scheduler. Use native automations targeting the bot's session or agent; openbot adds per-bot tagging, a view/edit surface and the "check progress" pattern. `bot.json` gets an optional `automations` section (additive, schema stays 1 or bumps to 2 with a migration).
-4. **Telegram**: a server-side bridge in the same plugin (long polling, strict allowlist of user ids) that routes messages to `bot_say` and exposes `bot_notify`. Runs under `opencode serve` for 24/7.
+3. **Automations**: done in v0.3 (native automations, status-gated, state-driven). Next: fresh-conversation-per-run option, run history in the TUI.
+4. **Telegram**: a server-side bridge in the same plugin (long polling, strict allowlist of user ids) that reads the same `inbox.json` the TUI reads, routes your replies to `bot_say`, and answers pending questions with `session.form.reply`. Runs under `opencode serve` for 24/7.
 5. **Bot-to-bot**: already works through `bot_say`, with a cycle guard. Next: depth limits, budgets per chain, and the `capabilities` field (reserved in `bot.json`) to grant `bots.create`, other plugins, etc.
-6. **Learning / compaction**: a `memory.md` in the bot directory injected through the session compaction hook; the bot curates it at the end of runs.
+6. **Learning**: `state.md` already is the curated memory; a possible extra is a notes file the bot consolidates from `history/` (only if state alone proves insufficient).
 
 Schema compatibility rule: `bot.json` only gains **optional** fields; a file with a newer `schema` is refused with a clear message.

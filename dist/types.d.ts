@@ -17,6 +17,27 @@ export interface McpRemote {
     [extra: string]: unknown;
 }
 export type McpServerConfig = McpLocal | McpRemote;
+/** Lifecycle. `stopped` = paused by a human, `finished` = the bot declared its goal achieved. Both silence automations. */
+export type BotStatus = "active" | "stopped" | "finished";
+export declare const BOT_STATUSES: readonly BotStatus[];
+/**
+ * A scheduled run. Exactly one of every / cron / at.
+ *   every: "30 minutes" | "6 hours" | "1 day"   (at least 1 minute)
+ *   cron:  "0 9 * * 1-5"   (with optional tz, e.g. "Europe/Paris")
+ *   at:    "in 10 minutes" | "2026-12-01T09:00"  (once)
+ */
+export interface AutomationSpec {
+    id: string;
+    every?: string;
+    cron?: string;
+    at?: string;
+    tz?: string;
+    /** Extra instructions for this run, added to the standard routine prompt. */
+    prompt?: string;
+    /** false = kept in bot.json but not scheduled. */
+    enabled?: boolean;
+    expires?: string;
+}
 export interface BotConfig {
     schema: typeof SCHEMA_VERSION;
     /** Unique, lowercase, used as `@name` and as the agent id. */
@@ -37,6 +58,12 @@ export interface BotConfig {
     mcps?: Record<string, McpServerConfig>;
     /** Reserved: access to other plugins / bots / budgets. Not enforced yet. */
     capabilities?: Record<string, unknown>;
+    /** Scheduled runs (synced to native opencode automations while the bot is active). */
+    automations?: AutomationSpec[];
+    /** Default active. */
+    status?: BotStatus;
+    statusNote?: string;
+    statusAt?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -50,6 +77,7 @@ export interface BotInput {
     skills?: string[];
     mcps?: Record<string, McpServerConfig>;
     capabilities?: Record<string, unknown>;
+    automations?: AutomationSpec[];
 }
 /** Fields a caller may change. `null` clears an optional field. */
 export interface BotPatch {
@@ -60,6 +88,7 @@ export interface BotPatch {
     skills?: string[] | null;
     mcps?: Record<string, McpServerConfig> | null;
     capabilities?: Record<string, unknown> | null;
+    automations?: AutomationSpec[] | null;
 }
 /** Legacy single-session state (v0.1). Still read, migrated into threads. */
 export interface BotState {

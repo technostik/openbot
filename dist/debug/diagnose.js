@@ -170,6 +170,42 @@ async function diagnoseBot(env, bot, add, shared) {
                 add({ scope: s, id: `mcp:${name}`, level: "ok", title: `MCP "${name}" is connected` });
         }
     }
+    // lifecycle, state, automations, inbox, history
+    const status = bot.status ?? "active";
+    add(status === "active" ? { scope: s, id: "status", level: "ok", title: "Status: active" } : { scope: s, id: "status", level: "info", title: `Status: ${status}${bot.statusNote ? ` (${bot.statusNote})` : ""}`, detail: "Its automations are not scheduled while it is not active." });
+    add(fs.existsSync(store.stateFile(s)) ? { scope: s, id: "state", level: "ok", title: `State file: state.md (${store.readStateFile(s).length} characters)`, detail: store.stateFile(s) } : { scope: s, id: "state", level: "warn", title: "state.md is missing", fix: "It is recreated on the next plugin reload." });
+    const specs = bot.automations ?? [];
+    if (loadedThere === false) {
+        add({ scope: s, id: "tools-in-workdir", level: specs.length ? "error" : "warn", title: "openbot is not loaded in the bot's working directory", detail: "There the bot has no bot_state, bot_notify, bot_status or bot_automation tools, and its state is not injected into its prompt.", fix: "Install openbot globally (~/.config/opencode/opencode.json), then /reload." });
+    }
+    if (specs.length) {
+        let errors = [];
+        try {
+            errors = JSON.parse(fs.readFileSync(path.join(store.botDir(s), "state", "automation.json"), "utf8")).errors ?? [];
+        }
+        catch {
+            /* not synced yet */
+        }
+        if (errors.length)
+            add({ scope: s, id: "automations", level: "error", title: `Automation sync failed: ${errors[0].error}`, detail: errors.map((e) => `${e.name}: ${e.error}`).join("; "), fix: "Check that automations are enabled in opencode (2.4+) and that each schedule is valid." });
+        else
+            add({ scope: s, id: "automations", level: "ok", title: `${specs.length} automation(s) configured${status === "active" ? " and synced" : " (not scheduled: bot is " + status + ")"}`, detail: specs.map((x) => `${x.id}: ${x.every ? "every " + x.every : x.cron ? "cron " + x.cron : "at " + x.at}${x.enabled === false ? " (disabled)" : ""}`).join("; ") });
+    }
+    try {
+        const open = JSON.parse(fs.readFileSync(path.join(store.botDir(s), "inbox.json"), "utf8")).items?.filter((i) => i.status === "open").length ?? 0;
+        if (open)
+            add({ scope: s, id: "inbox", level: "info", title: `${open} item(s) waiting for you in the inbox` });
+    }
+    catch {
+        /* no inbox yet */
+    }
+    try {
+        const rec = Object.keys(JSON.parse(fs.readFileSync(path.join(store.botDir(s), "history", "index.json"), "utf8"))).length;
+        add({ scope: s, id: "history", level: "ok", title: `History: ${rec} recorded conversation(s)` });
+    }
+    catch {
+        add({ scope: s, id: "history", level: "info", title: "History: nothing recorded yet" });
+    }
     // conversations and their last outcome
     const threads = store.listThreads(s);
     if (!threads.length)

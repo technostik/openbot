@@ -3,6 +3,7 @@
  * in the bot's working directory and uses the bot's agent. Everything here is
  * written against a narrow SessionPort so it can be tested without a host.
  */
+import { syncHistory } from "./history.js"
 import type { BotStore } from "./store.js"
 import type { BotConfig } from "./types.js"
 
@@ -164,6 +165,7 @@ export async function say(port: SessionPort, store: BotStore, bot: BotConfig, me
 
   const deadline = Date.now() + (opts.timeoutMs ?? 300_000)
   const pollMs = opts.pollMs ?? 400
+  const record = () => syncHistory(port, store, bot.name, sessionID, { thread: key, parentID: opts.callerSessionID }).catch(() => 0)
   let aborted = false
   const onAbort = () => {
     aborted = true
@@ -177,6 +179,7 @@ export async function say(port: SessionPort, store: BotStore, bot: BotConfig, me
       await Promise.race([port.wait({ sessionID }).catch(() => {}), sleep(Math.min(left, 5_000))])
       const reply = extractReply(await port.context({ sessionID }), sent.id)
       if (reply.done) {
+        await record()
         const failed = reply.outcome === "failed"
         return {
           sessionID,
@@ -189,6 +192,7 @@ export async function say(port: SessionPort, store: BotStore, bot: BotConfig, me
       }
       await sleep(pollMs)
     }
+    await record()
     return { sessionID, thread: key, status: "timeout", text: "" }
   } finally {
     opts.signal?.removeEventListener("abort", onAbort)

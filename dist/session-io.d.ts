@@ -1,8 +1,3 @@
-/**
- * Talking to a bot = prompting the bot's own persistent session, which lives
- * in the bot's working directory and uses the bot's agent. Everything here is
- * written against a narrow SessionPort so it can be tested without a host.
- */
 import type { BotStore } from "./store.js";
 import type { BotConfig } from "./types.js";
 export interface SessionPort {

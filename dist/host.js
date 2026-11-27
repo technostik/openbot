@@ -20,6 +20,8 @@ export function composeSystem(bot, systemFile) {
         ...(bot.description ? [`Purpose: ${bot.description}`] : []),
         `Your working directory is ${bot.workdir}. Keep your files and notes there.`,
         `You can read and change your own configuration with the bot_get and bot_update tools, and talk to other bots with bot_say.`,
+        `Memory: your state file (state.md) is shown to you at the start of every turn. Keep it current with bot_state: your goal, what is important, your todo list, what you are waiting for. Every conversation is recorded automatically; read it back with bot_history.`,
+        `Reaching the user: bot_notify alerts them without waiting; the question tool asks and waits for the answer. When your goal is fully achieved call bot_status with "finished" (never if the goal runs forever). Manage your own scheduled runs with bot_automation.`,
         ...(systemFile
             ? [`Your master prompt (the "Your instructions" section below) is the file ${systemFile}. You may edit it to change your own behavior; edits apply from your next message.`]
             : []),

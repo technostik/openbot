@@ -9,11 +9,15 @@
  */
 import type { Plugin } from "@opencode/plugin"
 import { MARKER_AGENT } from "./constants.js"
+import { reconcile, type NativeAutomations } from "./automation.js"
 import { createDebugLog } from "./debug/log.js"
 import { debugEnabled } from "./debug/enabled.js"
 import { applyAgents, applyWorkdirMcp, applyWorkdirSkills, newOwned } from "./host.js"
+import { syncHistory } from "./history.js"
+import { buildStateContext } from "./memory.js"
 import { delegationText, findMention } from "./mention.js"
 import { resolveRoot } from "./paths.js"
+import { ensureSession } from "./session-io.js"
 import { makeService, syncAll } from "./service.js"
 import { BotStore } from "./store.js"
 import { buildTools, type ToolDef } from "./tools.js"
@@ -61,8 +65,25 @@ const openbot: Plugin.Plugin = {
       log("reload", { bots: store.list().map((b) => b.name) })
     }
 
+    // Native opencode automations (2.4+), kept in step with bot.json and each bot's status.
+    const nativeApi = (ctx as any).experimental?.automation
+    const unwrap = (o: any): any[] => (Array.isArray(o) ? o : Array.isArray(o?.data) ? o.data : [])
+    const native: NativeAutomations | undefined =
+      nativeApi && options?.automations !== false
+        ? {
+            list: async () => unwrap(await nativeApi.list()),
+            create: (input) => nativeApi.create(input),
+            remove: async (id) => void (await nativeApi.delete({ automationID: id })),
+          }
+        : undefined
+    const reconcileAutomations = async () => {
+      if (!native) return { created: [], removed: [], kept: [], errors: [] }
+      return reconcile({ store, native, log, ensureAutoSession: async (bot) => (await ensureSession(ctx.session as any, store, bot, { key: "auto" })).sessionID })
+    }
+    if (native) void reconcileAutomations().catch((e) => log("automation-error", String(e)))
+
     // Optional debug tools live in their own module and are only loaded when switched on.
-    let tools: ToolDef[] = buildTools({ store, service, session: ctx.session as any, reload })
+    let tools: ToolDef[] = buildTools({ store, service, session: ctx.session as any, reload, automation: native ? { native, reconcile: reconcileAutomations } : undefined })
     if (debug) {
       const { buildDebugTools } = await import("./debug/tools.js")
       tools = [...tools, ...buildDebugTools({ ctx, store, version: VERSION, options, materializeEnabled: service.materialize })]
@@ -92,6 +113,43 @@ const openbot: Plugin.Plugin = {
       }),
     )
 
+    // The bot always sees its own state: injected into its system prompt on every turn.
+    disposers.push(
+      await ctx.session.hook("context", (c: any) => {
+        if (!store.exists(c.agent)) return
+        const block = buildStateContext(store, c.agent)
+        if (block) c.system.push({ type: "text", text: block })
+      }),
+    )
+
+    // Every conversation with a bot is recorded in its folder when its run ends.
+    const botOfSession = new Map<string, string | null>()
+    const whoseSession = async (sessionID: string): Promise<string | undefined> => {
+      for (const b of store.list()) if (store.isBotSession(b.name, sessionID)) return b.name
+      if (!botOfSession.has(sessionID)) {
+        try {
+          const s: any = await ctx.session.get({ sessionID })
+          botOfSession.set(sessionID, s?.agent && store.exists(s.agent) ? s.agent : null)
+        } catch {
+          botOfSession.set(sessionID, null)
+        }
+      }
+      return botOfSession.get(sessionID) ?? undefined
+    }
+    disposers.push(
+      await ctx.session.hook("experimental.idle", async (p: any) => {
+        try {
+          const name = await whoseSession(p.sessionID)
+          if (!name) return
+          const thread = store.listThreads(name).find((t) => t.sessionID === p.sessionID)
+          const n = await syncHistory(ctx.session as any, store, name, p.sessionID, { thread: thread?.key, parentID: thread?.parentID })
+          if (n) log("history", { bot: name, session: p.sessionID, added: n })
+        } catch (e) {
+          log("history-error", String(e))
+        }
+      }),
+    )
+
     // Hand edits of bot.json / system.md (or edits from another process) are picked up here.
     let signature = store.signature()
     const timer = setInterval(() => {
@@ -99,7 +157,9 @@ const openbot: Plugin.Plugin = {
       if (now === signature) return
       signature = now
       log("change-detected")
-      void reload().catch((e) => log("reload-error", String(e)))
+      void reload()
+        .then(() => reconcileAutomations())
+        .catch((e) => log("reload-error", String(e)))
     }, POLL_MS)
     timer.unref?.()
 

@@ -1,6 +1,6 @@
 {
   "name": "openbot",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Named, configurable bots for opencode: agent + working directory + skills + MCP, packaged as one exportable entity.",
   "type": "module",
   "license": "UNLICENSED",
@@ -11,7 +11,6 @@
     "agent",
     "bot"
   ],
-  "options": { "debug": true },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/technostik/openbot.git"
@@ -36,7 +35,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tui.json",
     "test": "npm run build && npm run typecheck && node --test test/*.test.mjs",
-    "test:e2e": "npm run build && node test/e2e/run.mjs && node test/e2e/project-only.mjs && node test/e2e/debug-off.mjs",
+    "test:e2e": "npm run build && node test/e2e/run.mjs && node test/e2e/project-only.mjs && node test/e2e/debug-off.mjs && node test/e2e/lifecycle.mjs",
     "test:tui": "npm run build && node test/tui/run.mjs"
   },
   "devDependencies": {

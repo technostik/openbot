@@ -4,7 +4,10 @@ import { assertName, nameProblem } from "./names.js"
 import { expandPath } from "./paths.js"
 import {
   BotError,
+  BOT_STATUSES,
   SCHEMA_VERSION,
+  type AutomationSpec,
+  type BotStatus,
   type BotConfig,
   type BotInput,
   type BotPatch,
@@ -71,6 +74,48 @@ export function validateMcps(mcps: unknown): Record<string, McpServerConfig> {
     }
   }
   return out
+}
+
+const AUTO_ID_RE = /^[a-z][a-z0-9-]{0,31}$/
+const EVERY_RE = /^(\d+)\s+(minute|minutes|hour|hours|day|days)$/
+const MAX_AUTOMATIONS = 10
+
+/** Validates scheduled runs. The host needs prompt automations to be at least one minute apart. */
+export function validateAutomations(list: unknown): AutomationSpec[] {
+  if (!Array.isArray(list)) throw new BotError("automations must be an array")
+  if (list.length > MAX_AUTOMATIONS) throw new BotError(`at most ${MAX_AUTOMATIONS} automations per bot`)
+  const seen = new Set<string>()
+  return list.map((raw: any) => {
+    if (!raw || typeof raw !== "object") throw new BotError("each automation must be an object")
+    const id = raw.id
+    if (typeof id !== "string" || !AUTO_ID_RE.test(id)) throw new BotError('automation "id" must be lowercase letters, digits and dashes (e.g. "daily-scan")')
+    if (seen.has(id)) throw new BotError(`duplicate automation id "${id}"`)
+    seen.add(id)
+    const triggers = ["every", "cron", "at"].filter((k) => raw[k] !== undefined)
+    if (triggers.length !== 1) throw new BotError(`automation "${id}": give exactly one of every / cron / at`)
+    const out: AutomationSpec = { id }
+    if (raw.every !== undefined) {
+      const m = typeof raw.every === "string" ? EVERY_RE.exec(raw.every.trim()) : null
+      if (!m || Number(m[1]) < 1) throw new BotError(`automation "${id}": every must look like "30 minutes", "6 hours" or "1 day"`)
+      out.every = raw.every.trim()
+    }
+    if (raw.cron !== undefined) {
+      if (typeof raw.cron !== "string" || raw.cron.trim().split(/\s+/).length < 5) throw new BotError(`automation "${id}": cron needs 5 fields, e.g. "0 9 * * 1-5"`)
+      out.cron = raw.cron.trim()
+    }
+    if (raw.at !== undefined) {
+      if (typeof raw.at !== "string" || !raw.at.trim()) throw new BotError(`automation "${id}": at must be a time such as "in 10 minutes" or "2026-12-01T09:00"`)
+      out.at = raw.at.trim()
+    }
+    if (raw.tz !== undefined) out.tz = String(raw.tz)
+    if (raw.prompt !== undefined) {
+      if (typeof raw.prompt !== "string") throw new BotError(`automation "${id}": prompt must be text`)
+      if (raw.prompt.trim()) out.prompt = raw.prompt.trim()
+    }
+    if (raw.enabled !== undefined) out.enabled = raw.enabled !== false
+    if (raw.expires !== undefined) out.expires = String(raw.expires)
+    return out
+  })
 }
 
 function validateCapabilities(c: unknown): Record<string, unknown> {
@@ -219,10 +264,12 @@ export class BotStore {
     if (input.skills !== undefined) bot.skills = validateSkills(input.skills)
     if (input.mcps !== undefined) bot.mcps = validateMcps(input.mcps)
     if (input.capabilities !== undefined) bot.capabilities = validateCapabilities(input.capabilities)
+    if (input.automations !== undefined) bot.automations = validateAutomations(input.automations)
     fs.mkdirSync(path.join(this.botDir(bot.name), "state"), { recursive: true })
     fs.mkdirSync(this.skillsDir(bot.name), { recursive: true })
     fs.mkdirSync(bot.workdir, { recursive: true })
     this.write(bot)
+    this.ensureStateFile(bot)
     return bot
   }
 
@@ -250,6 +297,10 @@ export class BotStore {
     if (patch.capabilities !== undefined) {
       if (patch.capabilities === null) delete next.capabilities
       else next.capabilities = validateCapabilities(patch.capabilities)
+    }
+    if (patch.automations !== undefined) {
+      if (patch.automations === null) delete next.automations
+      else next.automations = validateAutomations(patch.automations)
     }
     next.updatedAt = new Date().toISOString()
     fs.mkdirSync(next.workdir, { recursive: true })
@@ -290,6 +341,7 @@ export class BotStore {
         this.write(bot)
         migrated.push(bot.name)
       }
+      if (this.ensureStateFile(bot) && !migrated.includes(bot.name)) migrated.push(bot.name)
     }
     return migrated
   }
@@ -387,6 +439,80 @@ export class BotStore {
     if (j.skills !== undefined) bot.skills = validateSkills(j.skills)
     if (j.mcps !== undefined) bot.mcps = validateMcps(j.mcps)
     if (j.capabilities !== undefined) bot.capabilities = validateCapabilities(j.capabilities)
+    if (j.automations !== undefined) bot.automations = validateAutomations(j.automations)
+    if (j.status !== undefined) {
+      if (!BOT_STATUSES.includes(j.status as BotStatus)) throw new BotError(`status must be one of ${BOT_STATUSES.join(", ")}`)
+      bot.status = j.status as BotStatus
+    }
+    if (typeof j.statusNote === "string") bot.statusNote = j.statusNote
+    if (typeof j.statusAt === "string") bot.statusAt = j.statusAt
     return bot
   }
+
+  /* ---- lifecycle ---- */
+
+  /** Changes the bot's lifecycle status (the only writer of status). */
+  setStatus(name: string, status: BotStatus, note?: string): BotConfig {
+    if (!BOT_STATUSES.includes(status)) throw new BotError(`status must be one of ${BOT_STATUSES.join(", ")}`)
+    const bot = this.require(name)
+    const next: BotConfig = { ...bot, status, statusAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+    if (note?.trim()) next.statusNote = note.trim()
+    else delete next.statusNote
+    this.write(next)
+    return next
+  }
+
+  /* ---- state.md: the bot's working memory ---- */
+
+  stateFile(name: string): string {
+    return path.join(this.botDir(name), "state.md")
+  }
+
+  /** Creates state.md from the template when missing. */
+  ensureStateFile(bot: Pick<BotConfig, "name" | "description">): boolean {
+    const file = this.stateFile(bot.name)
+    if (fs.existsSync(file)) return false
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    this.atomicWrite(file, stateTemplate(bot))
+    return true
+  }
+
+  readStateFile(name: string): string {
+    try {
+      return fs.readFileSync(this.stateFile(name), "utf8")
+    } catch {
+      return ""
+    }
+  }
+
+  writeStateFile(name: string, content: string): void {
+    this.require(name)
+    if (Buffer.byteLength(content) > MAX_STATE_BYTES) throw new BotError(`state.md would exceed ${MAX_STATE_BYTES / 1024} KB: condense it (keep only what matters now)`)
+    this.atomicWrite(this.stateFile(name), content.endsWith("\n") ? content : content + "\n")
+  }
+}
+
+export const MAX_STATE_BYTES = 64 * 1024
+
+export function stateTemplate(bot: Pick<BotConfig, "name" | "description">): string {
+  return [
+    `# State of ${bot.name}`,
+    "",
+    "_Working memory. It is shown to the bot on every turn; the bot and you may edit it. Keep it short and current._",
+    "",
+    "## Goal",
+    bot.description ? bot.description : "(what this bot is for, and what \"finished\" would mean, if it ever ends)",
+    "",
+    "## Important",
+    "- ",
+    "",
+    "## Todo",
+    "- [ ] ",
+    "",
+    "## Waiting for the user",
+    "- (nothing)",
+    "",
+    "## Notes",
+    "",
+  ].join("\n")
 }
