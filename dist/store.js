@@ -64,6 +64,21 @@ const AUTO_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const EVERY_RE = /^(\d+)\s+(minute|minutes|hour|hours|day|days)$/;
 const MAX_AUTOMATIONS = 10;
 /** Validates scheduled runs. The host needs prompt automations to be at least one minute apart. */
+const REL_AT_RE = /^in\s+(\d+)\s+(second|minute|hour|day|week)s?$/i;
+const REL_AT_UNIT_MS = { second: 1000, minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 604_800_000 };
+/**
+ * Resolve a relative `at` ("in 10 minutes") once, when the spec is written.
+ * The native host stores the absolute date it resolved to, so keeping the
+ * relative string would make sameAutomation() see a difference on every
+ * reconcile and re-arm the schedule (a one-shot `at` would fire again and again).
+ */
+export function resolveAt(at, now = Date.now()) {
+    const value = at.trim();
+    const m = REL_AT_RE.exec(value);
+    if (!m)
+        return value;
+    return new Date(now + Number(m[1]) * REL_AT_UNIT_MS[m[2].toLowerCase()]).toISOString();
+}
 export function validateAutomations(list) {
     if (!Array.isArray(list))
         throw new BotError("automations must be an array");
@@ -97,7 +112,7 @@ export function validateAutomations(list) {
         if (raw.at !== undefined) {
             if (typeof raw.at !== "string" || !raw.at.trim())
                 throw new BotError(`automation "${id}": at must be a time such as "in 10 minutes" or "2026-12-01T09:00"`);
-            out.at = raw.at.trim();
+            out.at = resolveAt(raw.at);
         }
         if (raw.tz !== undefined)
             out.tz = String(raw.tz);

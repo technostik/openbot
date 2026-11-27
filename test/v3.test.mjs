@@ -48,6 +48,13 @@ test("automations: valid schedules and clear errors", () => {
   for (const [bad, re] of [[[{ id: "Bad", every: "1 hour" }], /id/], [[{ id: "x" }], /exactly one/], [[{ id: "x", every: "1 hour", cron: "* * * * *" }], /exactly one/], [[{ id: "x", every: "30 seconds" }], /every must look/], [[{ id: "x", every: "0 minutes" }], /every must look/], [[{ id: "x", cron: "* *" }], /cron needs/], [[{ id: "a", every: "1 day" }, { id: "a", every: "1 day" }], /duplicate/], ["nope", /array/], [Array.from({ length: 11 }, (_, i) => ({ id: `a${i}`, every: "1 day" })), /at most/]]) assert.throws(() => validateAutomations(bad), re)
 })
 
+test("automations: a relative at is resolved once to an absolute date", () => {
+  const [once] = validateAutomations([{ id: "once", at: "in 10 minutes" }])
+  assert.match(once.at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  const [fixed] = validateAutomations([{ id: "fixed", at: "2026-12-01T09:00" }])
+  assert.equal(fixed.at, "2026-12-01T09:00")
+})
+
 test("store: status defaults to active, round-trips, is validated; automations persist in bot.json", () => {
   const s = mk(); const b = s.create({ name: "lc", instructions: "x", automations: [{ id: "scan", every: "1 hour" }] })
   assert.equal(b.status, undefined); assert.equal(s.get("lc").automations[0].id, "scan")

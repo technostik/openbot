@@ -2,7 +2,13 @@ import { type AutomationSpec, type BotStatus, type BotConfig, type BotInput, typ
 export declare function validateModel(model: unknown): string;
 export declare function validateSkills(skills: unknown): string[];
 export declare function validateMcps(mcps: unknown): Record<string, McpServerConfig>;
-/** Validates scheduled runs. The host needs prompt automations to be at least one minute apart. */
+/**
+ * Resolve a relative `at` ("in 10 minutes") once, when the spec is written.
+ * The native host stores the absolute date it resolved to, so keeping the
+ * relative string would make sameAutomation() see a difference on every
+ * reconcile and re-arm the schedule (a one-shot `at` would fire again and again).
+ */
+export declare function resolveAt(at: string, now?: number): string;
 export declare function validateAutomations(list: unknown): AutomationSpec[];
 export interface ListResult {
     bots: BotConfig[];

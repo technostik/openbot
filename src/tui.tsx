@@ -92,11 +92,11 @@ function AlertDialog(props: {
         <text fg="#000000">{props.message}</text>
       </scrollbox>
       <text fg="#555555">{props.at}</text>
-      <box flexDirection="row" paddingTop={1}>
-        <box bg="#d0d0d0" paddingLeft={2} paddingRight={2} onMouseUp={props.onClose}>
+      <box flexDirection="row" paddingTop={1} gap={1}>
+        <box backgroundColor="#d0d0d0" paddingLeft={2} paddingRight={2} onMouseUp={props.onClose}>
           <text fg="#000000">Close</text>
         </box>
-        <box bg="#d0d0d0" paddingLeft={2} paddingRight={2} onMouseUp={props.onRead}>
+        <box backgroundColor="#d0d0d0" paddingLeft={2} paddingRight={2} onMouseUp={props.onRead}>
           <text fg="#000000">Mark as Read</text>
         </box>
       </box>
