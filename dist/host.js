@@ -4,6 +4,7 @@
  * they can be unit-tested with plain stand-ins.
  */
 import { loadLocalSkills } from "./skills.js";
+import { CAPABILITY_PRESETS } from "./types.js";
 export const newOwned = () => ({ agents: new Set(), mcps: new Set(), skills: new Set() });
 export function parseModelRef(model) {
     const [ref, variant] = model.split("#");
@@ -15,6 +16,17 @@ export function parseModelRef(model) {
  * `systemFile` is where the master prompt lives on disk, so the bot knows it can edit it.
  */
 export function composeSystem(bot, systemFile) {
+    const caps = describeCapabilities(bot);
+    const permissions = [
+        "## Permissions",
+        `Preset: ${caps.preset}`,
+        caps.tools === "*" ? "Tools: all" : `Tools: ${caps.tools.join(", ")} (anything else is denied)`,
+        ...(caps.denyTools.length ? [`Denied tools: ${caps.denyTools.join(", ")}`] : []),
+        `MCP servers: ${caps.mcpHosts.length ? caps.mcpHosts.join(", ") : "none"}`,
+        ...(caps.deniedMcps.length ? [`Denied MCP servers: ${caps.deniedMcps.join(", ")}`] : []),
+        caps.skills === "*" ? "Skills: all" : caps.skills === "none" ? "Skills: none" : `Skills: ${caps.skills.join(", ")}`,
+        ...(caps.unknownMcps.length ? [`Unknown MCP servers in the allowlist: ${caps.unknownMcps.join(", ")}`] : []),
+    ];
     const lines = [
         `You are "${bot.name}", a persistent bot running inside opencode (openbot).`,
         ...(bot.description ? [`Purpose: ${bot.description}`] : []),
@@ -25,6 +37,8 @@ export function composeSystem(bot, systemFile) {
         ...(systemFile
             ? [`Your master prompt (the "Your instructions" section below) is the file ${systemFile}. You may edit it to change your own behavior; edits apply from your next message.`]
             : []),
+        "",
+        ...permissions,
         "",
         "## Your instructions",
         bot.instructions,
@@ -48,6 +62,133 @@ export function skillRules(bot, localSkillNames) {
         { action: "skill", resource: "*", effect: "deny" },
         ...[...allowed].map((name) => ({ action: "skill", resource: name, effect: "allow" })),
     ];
+}
+const PRESET_DEFAULTS = {
+    none: { toolMode: "list", tools: [], skills: "none", mcps: "none" },
+    minimal: { toolMode: "list", tools: ["read", "glob", "grep"], skills: "none", mcps: "none" },
+    standard: { toolMode: "all", tools: [], skills: "bot", mcps: "all" },
+    full: { toolMode: "all", tools: [], skills: "all", mcps: "all" },
+};
+/**
+ * Applies a bot's preset, then its explicit `tools` / `denyTools` / `mcps`
+ * lists. `denyTools` is kept separate because it is applied last, when rules
+ * are emitted.
+ */
+export function resolveCapabilities(bot, _localSkillNames = []) {
+    const caps = bot.capabilities ?? {};
+    const preset = CAPABILITY_PRESETS.includes(caps.preset) ? caps.preset : "standard";
+    const base = PRESET_DEFAULTS[preset];
+    const toolMode = caps.tools === undefined ? base.toolMode : caps.tools.includes("*") ? "all" : "list";
+    const tools = toolMode === "all" ? [] : [...(caps.tools ?? base.tools)];
+    const botServers = Object.keys(bot.mcps ?? {});
+    const allowed = new Set();
+    const unknownMcps = [];
+    if (caps.mcps === undefined) {
+        if (base.mcps === "all")
+            for (const server of botServers)
+                allowed.add(server);
+    }
+    else if (caps.mcps.includes("*")) {
+        for (const server of botServers)
+            allowed.add(server);
+    }
+    else {
+        for (const raw of caps.mcps) {
+            const local = botServers.includes(raw)
+                ? raw
+                : raw.startsWith(`${bot.name}-`) && botServers.includes(raw.slice(bot.name.length + 1))
+                    ? raw.slice(bot.name.length + 1)
+                    : undefined;
+            if (local)
+                allowed.add(local);
+            else
+                unknownMcps.push(raw);
+        }
+    }
+    const mcps = botServers.filter((server) => allowed.has(server));
+    return {
+        preset,
+        toolMode,
+        tools,
+        denyTools: [...(caps.denyTools ?? [])],
+        mcps,
+        deniedMcps: botServers.filter((server) => !allowed.has(server)),
+        unknownMcps,
+        skills: base.skills,
+    };
+}
+export function describeCapabilities(bot, localSkillNames = []) {
+    const caps = resolveCapabilities(bot, localSkillNames);
+    const tools = caps.toolMode === "all" ? "*" : [...new Set([...caps.tools, "bot_*"])];
+    let skills;
+    if (caps.skills === "all")
+        skills = "*";
+    else if (caps.skills === "none")
+        skills = "none";
+    else if (bot.skills === undefined)
+        skills = "*";
+    else if (!bot.skills.length && !localSkillNames.length)
+        skills = "none";
+    else
+        skills = [...new Set([...bot.skills, ...localSkillNames])];
+    return {
+        preset: caps.preset,
+        tools,
+        denyTools: caps.denyTools,
+        mcps: caps.mcps,
+        mcpHosts: caps.mcps.map((server) => mcpHostName(bot.name, server)),
+        deniedMcps: caps.deniedMcps,
+        unknownMcps: caps.unknownMcps,
+        skills,
+    };
+}
+function skillRulesFor(bot, localSkillNames, mode) {
+    if (mode === "all")
+        return [];
+    if (mode === "none")
+        return [{ action: "skill", resource: "*", effect: "deny" }];
+    return skillRules(bot, localSkillNames);
+}
+/**
+ * Every permission rule a bot's capabilities imply: tools, MCP servers and
+ * skills, in evaluation order (later rules win). A bot without `capabilities`
+ * gets exactly the old skill allowlist and no tool rules, so its behavior is
+ * unchanged.
+ */
+export function capabilityRules(bot, localSkillNames = []) {
+    const caps = resolveCapabilities(bot, localSkillNames);
+    const rules = [];
+    const add = (action, resource, effect) => rules.push({ action, resource, effect });
+    if (caps.toolMode === "list")
+        add("*", "*", "deny");
+    // A configured MCP server the bot may not use is denied explicitly, so an
+    // "allow all" preset can still narrow the list. Tool allows come after, so a
+    // single MCP action can be re-allowed through `tools`.
+    for (const server of caps.deniedMcps) {
+        const host = mcpHostName(bot.name, server);
+        add(`${host}_*`, "*", "deny");
+        add("opencode_list_mcp_resources", host, "deny");
+        add("opencode_read_mcp_resource", `${host}:*`, "deny");
+    }
+    if (caps.toolMode === "list")
+        for (const tool of caps.tools)
+            add(tool, "*", "allow");
+    // In "allow all" mode the base policy already allows MCP tools, so these
+    // rules are only needed to re-allow an allowed server after a deny.
+    if (caps.toolMode === "list" || caps.deniedMcps.length > 0) {
+        for (const server of caps.mcps) {
+            const host = mcpHostName(bot.name, server);
+            add(`${host}_*`, "*", "allow");
+            add("opencode_list_mcp_resources", host, "allow");
+            add("opencode_read_mcp_resource", `${host}:*`, "allow");
+        }
+    }
+    if (caps.toolMode === "list" && !caps.tools.includes("bot_*"))
+        add("bot_*", "*", "allow");
+    rules.push(...skillRulesFor(bot, localSkillNames, caps.skills));
+    for (const tool of caps.denyTools)
+        add(tool, "*", "deny");
+    return rules;
 }
 /** Registers one agent per bot; retracts agents of bots that no longer exist. */
 export function applyAgents(editor, bots, owned, env) {
@@ -78,7 +219,7 @@ export function applyAgents(editor, bots, owned, env) {
                 a.model = parseModelRef(bot.model);
             else
                 delete a.model;
-            a.permissions = [...(a.permissions ?? []), ...skillRules(bot, local)];
+            a.permissions = [...(a.permissions ?? []), ...capabilityRules(bot, local)];
         });
         owned.agents.add(bot.name);
     }
@@ -100,8 +241,11 @@ const botsHere = (location, bots) => bots.filter((b) => b.workdir === location);
 export function applyWorkdirMcp(location, bots, mcp, owned) {
     const want = new Map();
     for (const bot of botsHere(location, bots)) {
-        for (const [server, cfg] of Object.entries(bot.mcps ?? {}))
-            want.set(mcpHostName(bot.name, server), cfg);
+        const allowed = new Set(resolveCapabilities(bot).mcps);
+        for (const [server, cfg] of Object.entries(bot.mcps ?? {})) {
+            if (allowed.has(server))
+                want.set(mcpHostName(bot.name, server), cfg);
+        }
     }
     for (const name of [...owned.mcps])
         if (!want.has(name)) {

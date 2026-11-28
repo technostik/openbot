@@ -5,13 +5,16 @@ import { expandPath } from "./paths.js"
 import {
   BotError,
   BOT_STATUSES,
+  CAPABILITY_PRESETS,
   SCHEMA_VERSION,
   type AutomationSpec,
+  type BotCapabilities,
   type BotStatus,
   type BotConfig,
   type BotInput,
   type BotPatch,
   type BotState,
+  type CapabilityPreset,
   type McpServerConfig,
   type ThreadInfo,
   type Threads,
@@ -134,9 +137,32 @@ export function validateAutomations(list: unknown): AutomationSpec[] {
   })
 }
 
-function validateCapabilities(c: unknown): Record<string, unknown> {
+function validateStringList(v: unknown, label: string): string[] {
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x.trim())) {
+    throw new BotError(`${label} must be an array of non-empty strings`)
+  }
+  return [...new Set(v.map((x: string) => x.trim()))]
+}
+
+/**
+ * Validates the reserved `capabilities` field. Unknown keys are kept: bots
+ * created before v4 may have a free-form object there, and dropping it would
+ * silently rewrite their bot.json.
+ */
+export function validateCapabilities(c: unknown): BotCapabilities {
   if (!c || typeof c !== "object" || Array.isArray(c)) throw new BotError("capabilities must be an object")
-  return { ...(c as Record<string, unknown>) }
+  const raw = c as Record<string, unknown>
+  const out: BotCapabilities = { ...raw }
+  if (raw.preset !== undefined) {
+    if (typeof raw.preset !== "string" || !CAPABILITY_PRESETS.includes(raw.preset as CapabilityPreset)) {
+      throw new BotError(`capabilities.preset must be one of ${CAPABILITY_PRESETS.join(", ")}`)
+    }
+    out.preset = raw.preset as CapabilityPreset
+  }
+  for (const key of ["tools", "denyTools", "mcps"] as const) {
+    if (raw[key] !== undefined) out[key] = validateStringList(raw[key], `capabilities.${key}`)
+  }
+  return out
 }
 
 function validateInstructions(v: unknown): string {

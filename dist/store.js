@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { assertName, nameProblem } from "./names.js";
 import { expandPath } from "./paths.js";
-import { BotError, BOT_STATUSES, SCHEMA_VERSION, } from "./types.js";
+import { BotError, BOT_STATUSES, CAPABILITY_PRESETS, SCHEMA_VERSION, } from "./types.js";
 const MODEL_RE = /^[^/\s#]+\/[^\s#]+(#[^\s#]+)?$/;
 const MCP_KEY_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 /* ------------------------------------------------------------------ */
@@ -129,10 +129,33 @@ export function validateAutomations(list) {
         return out;
     });
 }
-function validateCapabilities(c) {
+function validateStringList(v, label) {
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x.trim())) {
+        throw new BotError(`${label} must be an array of non-empty strings`);
+    }
+    return [...new Set(v.map((x) => x.trim()))];
+}
+/**
+ * Validates the reserved `capabilities` field. Unknown keys are kept: bots
+ * created before v4 may have a free-form object there, and dropping it would
+ * silently rewrite their bot.json.
+ */
+export function validateCapabilities(c) {
     if (!c || typeof c !== "object" || Array.isArray(c))
         throw new BotError("capabilities must be an object");
-    return { ...c };
+    const raw = c;
+    const out = { ...raw };
+    if (raw.preset !== undefined) {
+        if (typeof raw.preset !== "string" || !CAPABILITY_PRESETS.includes(raw.preset)) {
+            throw new BotError(`capabilities.preset must be one of ${CAPABILITY_PRESETS.join(", ")}`);
+        }
+        out.preset = raw.preset;
+    }
+    for (const key of ["tools", "denyTools", "mcps"]) {
+        if (raw[key] !== undefined)
+            out[key] = validateStringList(raw[key], `capabilities.${key}`);
+    }
+    return out;
 }
 function validateInstructions(v) {
     if (typeof v !== "string" || !v.trim())

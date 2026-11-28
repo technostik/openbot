@@ -26,6 +26,30 @@ export type McpServerConfig = McpLocal | McpRemote
 export type BotStatus = "active" | "stopped" | "finished"
 export const BOT_STATUSES: readonly BotStatus[] = ["active", "stopped", "finished"]
 
+/** Permission baselines. Explicit lists in BotCapabilities are applied after the preset. */
+export type CapabilityPreset = "none" | "minimal" | "standard" | "full"
+export const CAPABILITY_PRESETS: readonly CapabilityPreset[] = ["none", "minimal", "standard", "full"]
+
+/**
+ * Per-bot permissions. A preset gives the base; the lists override it.
+ * `tools` and `denyTools` hold opencode permission actions (read, edit, shell,
+ * `<mcp-server>_<tool>`, `bot_*`, ...), not human tool labels. `mcps` holds
+ * the bot's own MCP server names (keys of BotConfig.mcps) or their host names
+ * (`<bot>-<server>`). Unknown keys are kept so a legacy free-form
+ * `capabilities` object still round-trips.
+ */
+export interface BotCapabilities {
+  /** Base applied before the lists. Default: "standard". */
+  preset?: CapabilityPreset
+  /** Allowed tool actions. "*" = all. undefined = the preset's list. */
+  tools?: string[]
+  /** Denied tool actions. Always wins over the allowlist. */
+  denyTools?: string[]
+  /** Allowed MCP servers (keys of BotConfig.mcps, or "<bot>-<server>"). "*" = all. */
+  mcps?: string[]
+  [extra: string]: unknown
+}
+
 /**
  * A scheduled run. Exactly one of every / cron / at.
  *   every: "30 minutes" | "6 hours" | "1 day"   (at least 1 minute)
@@ -63,8 +87,8 @@ export interface BotConfig {
   skills?: string[]
   /** MCP servers owned by this bot, keyed by a short local name. */
   mcps?: Record<string, McpServerConfig>
-  /** Reserved: access to other plugins / bots / budgets. Not enforced yet. */
-  capabilities?: Record<string, unknown>
+  /** Per-bot permissions: preset + explicit tool / MCP lists. */
+  capabilities?: BotCapabilities
   /** Scheduled runs (synced to native opencode automations while the bot is active). */
   automations?: AutomationSpec[]
   /** Default active. */
@@ -84,7 +108,7 @@ export interface BotInput {
   workdir?: string
   skills?: string[]
   mcps?: Record<string, McpServerConfig>
-  capabilities?: Record<string, unknown>
+  capabilities?: BotCapabilities
   automations?: AutomationSpec[]
 }
 
@@ -96,7 +120,7 @@ export interface BotPatch {
   workdir?: string
   skills?: string[] | null
   mcps?: Record<string, McpServerConfig> | null
-  capabilities?: Record<string, unknown> | null
+  capabilities?: BotCapabilities | null
   automations?: AutomationSpec[] | null
 }
 

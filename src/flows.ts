@@ -6,7 +6,9 @@
 import fs from "node:fs"
 import path from "node:path"
 import type { Plugin } from "@opencode/plugin/tui"
+import { readAudit } from "./audit.js"
 import { describeAutomations, standardPrompt } from "./automation.js"
+import { describeCapabilities } from "./host.js"
 import { listTree, readInside } from "./files.js"
 import { listRecorded, readRecorded, renderTranscript } from "./history.js"
 import { addToSection } from "./memory.js"
@@ -16,7 +18,7 @@ import { redactBot } from "./redact.js"
 import { createBot, deleteBot, updateBot, type Service } from "./service.js"
 import { say, type SessionPort } from "./session-io.js"
 import type { BotStore } from "./store.js"
-import type { BotConfig, BotStatus } from "./types.js"
+import { CAPABILITY_PRESETS, type BotCapabilities, type BotConfig, type BotStatus, type CapabilityPreset } from "./types.js"
 import { VERSION } from "./version.js"
 
 type Context = Plugin.Context
@@ -136,6 +138,8 @@ export async function botMenuFlow(d: FlowDeps, name: string): Promise<void> {
         { title: "Working directory", value: "files", description: `browse ${bot.workdir}` },
         { title: "Bot folder", value: "folder", description: "system.md, state.md, history, inbox, skills" },
         { title: "Model", value: "model", description: bot.model ?? "default model" },
+        { title: "Permissions", value: "perms", description: `${describeCapabilities(bot).preset} preset: tools, MCP, skills` },
+        { title: "Audit log", value: "audit", description: "recent sensitive tool use (MCP, third-party tools, bot_say)" },
         { title: "Configuration", value: "config", description: "bot.json (secrets hidden)" },
         ...(d.debug ? [{ title: "Diagnose", value: "diag", description: "check everything this bot needs", category: "Debug" }, { title: "Generate report", value: "report", description: "write a full markdown report", category: "Debug" }] : []),
         { title: "Delete bot", value: "delete", description: "removes its config; the working directory is kept", category: "Danger" },
@@ -151,6 +155,8 @@ export async function botMenuFlow(d: FlowDeps, name: string): Promise<void> {
     else if (choice === "files") await browseFlow(d, `@${name}: working directory`, bot.workdir)
     else if (choice === "folder") await browseFlow(d, `@${name}: bot folder`, d.store.botDir(name))
     else if (choice === "model") await modelFlow(d, name)
+    else if (choice === "perms") await permissionsFlow(d, name)
+    else if (choice === "audit") await auditFlow(d, name)
     else if (choice === "config") await view(d, `@${name}: bot.json`, JSON.stringify(redactBot(bot), null, 2))
     else if (choice === "diag") await diagnoseFlow(d, name, false)
     else if (choice === "report") await diagnoseFlow(d, name, true)
@@ -470,6 +476,107 @@ async function modelFlow(d: FlowDeps, name: string): Promise<void> {
   } catch (e) {
     await d.ctx.ui.dialog.alert({ title: "Could not change the model", message: message(e) })
   }
+}
+
+const PRESET_HELP: Record<CapabilityPreset, string> = {
+  none: "only the bot_* tools; no MCP servers, no skills",
+  minimal: "read the workspace with read/glob/grep plus bot_*; no MCP servers, no skills",
+  standard: "current behavior: all tools, the bot's MCP servers and its skills",
+  full: "all tools, the bot's MCP servers and every skill",
+}
+
+const presetSummary = (bot: BotConfig): string => {
+  const caps = describeCapabilities(bot)
+  const tools = caps.tools === "*" ? "all tools" : caps.tools.join(", ") || "no tools"
+  const skills = caps.skills === "*" ? "all skills" : caps.skills === "none" ? "no skills" : `${caps.skills.length} skill(s)`
+  return `${tools}; ${caps.mcpHosts.length} MCP; ${skills}`
+}
+
+async function editCapabilityList(d: FlowDeps, bot: BotConfig, key: "tools" | "denyTools" | "mcps"): Promise<BotCapabilities | null | undefined> {
+  const { dialog } = d.ctx.ui
+  const current = bot.capabilities?.[key] as string[] | undefined
+  const labels = { tools: "allowed tools", denyTools: "denied tools", mcps: "MCP servers" }
+  const act = await dialog.select<string>({
+    title: `@${bot.name}: ${labels[key]}`,
+    options: [
+      { title: "Use the preset", value: "preset", description: "remove this explicit list and follow the preset" },
+      { title: "All (*)", value: "all", description: key === "mcps" ? "every MCP server of this bot" : "every tool" },
+      { title: "Edit the list", value: "edit", description: current?.length ? current.join(", ") : "empty" },
+    ],
+  })
+  if (!act) return undefined
+  const next: BotCapabilities = { ...(bot.capabilities ?? {}) }
+  if (act === "preset") delete next[key]
+  else if (act === "all") next[key] = ["*"]
+  else {
+    const text = await dialog.prompt({
+      title: `@${bot.name}: ${labels[key]}`,
+      description: key === "mcps" ? "Comma-separated server names from the bot's mcps (or host names)." : "Comma-separated tool actions, e.g. read, edit, shell, bot_*.",
+      value: (current ?? []).join(", "),
+      placeholder: key === "mcps" ? "github, slack" : "read, edit, bot_*",
+    })
+    if (text === undefined) return undefined
+    next[key] = text
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return Object.keys(next).length ? next : null
+}
+
+async function permissionsFlow(d: FlowDeps, name: string): Promise<void> {
+  const { dialog, toast } = d.ctx.ui
+  for (;;) {
+    const bot = d.store.require(name)
+    const caps = describeCapabilities(bot)
+    const choice = await dialog.select<string>({
+      title: `@${name}: permissions`,
+      options: [
+        { title: "Preset", value: "preset", description: `${caps.preset}: ${presetSummary(bot)}` },
+        { title: "Allowed tools", value: "tools", description: caps.tools === "*" ? "all tools" : caps.tools.join(", ") || "none" },
+        { title: "Denied tools", value: "denyTools", description: caps.denyTools.length ? caps.denyTools.join(", ") : "none" },
+        { title: "MCP servers", value: "mcps", description: caps.mcpHosts.length ? caps.mcpHosts.join(", ") : "none" },
+        { title: "Reset to the default preset", value: "reset", description: "remove capabilities (standard preset)", category: "Danger" },
+      ],
+    })
+    if (!choice) return
+    try {
+      if (choice === "preset") {
+        const preset = await dialog.select<CapabilityPreset>({
+          title: `@${name}: permission preset`,
+          current: caps.preset,
+          options: CAPABILITY_PRESETS.map((p) => ({ title: p, value: p, description: PRESET_HELP[p] })),
+        })
+        if (!preset) continue
+        updateBot(d.service, name, { capabilities: { ...(bot.capabilities ?? {}), preset } })
+        toast.show({ message: `@${name}: preset ${preset}`, variant: "success" })
+      } else if (choice === "reset") {
+        if (!(await dialog.confirm({ title: `@${name}: reset permissions?`, message: "Remove every explicit list and use the standard preset (current behavior).", label: { confirm: "Reset" } }))) continue
+        updateBot(d.service, name, { capabilities: null })
+        toast.show({ message: `@${name}: permissions reset to standard`, variant: "success" })
+      } else {
+        const key = choice as "tools" | "denyTools" | "mcps"
+        const next = await editCapabilityList(d, bot, key)
+        if (next === undefined) continue
+        updateBot(d.service, name, { capabilities: next })
+        toast.show({ message: `@${name}: ${key} updated`, variant: "success" })
+      }
+    } catch (e) {
+      await dialog.alert({ title: "Could not change the permissions", message: message(e) })
+    }
+  }
+}
+
+async function auditFlow(d: FlowDeps, name: string): Promise<void> {
+  const rows = readAudit(d.store, name, 100)
+  if (!rows.length) {
+    await d.ctx.ui.dialog.alert({ title: `@${name}: audit log`, message: "No sensitive tool use recorded yet. MCP servers, third-party tools and bot_say are audited." })
+    return
+  }
+  const text = rows
+    .map((r) => `${r.at}  ${r.tool}${r.target ? ` -> ${r.target}` : ""}${r.sessionID ? `  [${r.sessionID}]` : ""}${r.codemode ? " (code mode)" : ""}${r.detail ? `  ${r.detail}` : ""}`)
+    .join("\n")
+  await view(d, `@${name}: audit log (${rows.length} newest)`, text)
 }
 
 async function promptFlow(d: FlowDeps, name: string): Promise<void> {

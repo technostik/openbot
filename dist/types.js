@@ -5,6 +5,7 @@
  */
 export const SCHEMA_VERSION = 1;
 export const BOT_STATUSES = ["active", "stopped", "finished"];
+export const CAPABILITY_PRESETS = ["none", "minimal", "standard", "full"];
 export class BotError extends Error {
     constructor(message) {
         super(message);

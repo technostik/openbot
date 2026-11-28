@@ -73,7 +73,7 @@ export automatically. Restart opencode (or `/reload`) after editing the config.
   - **Master prompt**: view, replace, or add an instruction.
   - **Working directory** and **Bot folder** (`system.md`, `state.md`, history, inbox): browse folders and read whole files
     in a scrollable viewer (arrows or `j`/`k`, Space/`b` for pages, `g`/`G` for top/bottom, Esc to close).
-  - **Model**, **Configuration**, **Delete**; and with `debug`: **Diagnose**, **Generate report**.
+  - **Model**, **Permissions**, **Audit log**, **Configuration**, **Delete**; and with `debug`: **Diagnose**, **Generate report**.
 - The sidebar marks each bot: `[stopped]`, `!n` alerts waiting, `?n` questions waiting. New alerts raise a toast (and for
   `attention`: a desktop notification, a sound and the terminal bell). `Ctrl+P` → **Bots: inbox** (or `/bot-inbox`).
 
@@ -105,9 +105,9 @@ You can use either; bots are normal agents, so `subagent` with `agent: "scout"` 
 
 | Tool | What it does |
 | --- | --- |
-| `bot_create` | Create a bot (name, instructions, model, workdir, skills allowlist, MCP servers) |
-| `bot_list` / `bot_get` | List bots / show a bot's config, file paths and conversation stats |
-| `bot_update` | Change any field; a bot may call it on itself to change its own prompt |
+| `bot_create` | Create a bot (name, instructions, model, workdir, skills allowlist, MCP servers, permissions) |
+| `bot_list` / `bot_get` | List bots / show a bot's config, effective permissions, file paths and conversation stats |
+| `bot_update` | Change any field, including permissions; a bot may call it on itself to change its own prompt |
 | `bot_say` | Send a message. Default from a conversation: background (answer arrives later). `wait: true` blocks |
 | `bot_history` | Read a bot's recorded history (works after the session was deleted); `transcript: true` for readable text |
 | `bot_state` | Read or update `state.md` (`read`, `write`, `append`, `replace`) |
@@ -119,6 +119,27 @@ You can use either; bots are normal agents, so `subagent` with `agent: "scout"` 
 | `bot_export` / `bot_import` | Portable bundle (config + prompt + local skills); MCP secrets redacted by default |
 | `bot_delete` | Delete a bot (`confirm: true`; a custom workdir is never touched) |
 | `bot_diagnose` | *debug only*: check everything a bot needs; `ping: true` sends a real test message; `report: true` writes a report |
+
+### Permissions
+
+Each bot has a permission preset and optional explicit lists, stored in `bot.json` under `capabilities`:
+
+| Preset | Tools | MCP servers | Skills |
+| --- | --- | --- | --- |
+| `none` | only `bot_*` | none | none |
+| `minimal` | `read`, `glob`, `grep`, `bot_*` | none | none |
+| `standard` (default) | all | the bot's own | the bot's allowlist (unrestricted if omitted) |
+| `full` | all | the bot's own | all |
+
+Explicit `tools`, `denyTools` and `mcps` lists override the preset; `denyTools` always wins. `tools` and `denyTools` use opencode permission actions (`read`, `edit`, `shell`, `bot_*`, `<server>_<tool>`, ...), not tool labels. `mcps` accepts the bot's server keys or their host names (`scout-crm`); `"*"` means all.
+
+The effective rules are injected into the bot's system prompt, its native agent file and the agent registered by openbot. MCP servers the bot may not use are not registered at all. Edit them in the TUI under **Permissions**, or with `bot_update`:
+
+```json
+"capabilities": { "preset": "minimal", "tools": ["read", "glob", "grep", "edit"], "mcps": ["crm"] }
+```
+
+Sensitive tool use (MCP, third-party plugin tools, `bot_say`) is recorded in `state/audit.jsonl`; read the newest entries in the TUI under **Audit log**, or in `bot_diagnose`.
 
 ## Working autonomously
 
@@ -183,12 +204,13 @@ reply, open the conversation, answer a question or dismiss.
 ```
 <openbot home>/bots/scout/
   system.md              # the master prompt: plain markdown, edit it in any editor (the bot may edit it too)
-  bot.json               # configuration: description, model, workdir, skills, mcps, automations, status
+  bot.json               # configuration: description, model, workdir, skills, mcps, capabilities, automations, status
   state.md               # working memory: goal, important, todo (shown to the bot every turn)
   inbox.json             # alerts and notes from the bot to you
   history/               # every conversation, recorded (jsonl + index.json)
   skills/<id>/SKILL.md   # skills that ship with the bot
   state/threads.json     # live conversations (per calling session, plus "auto" for automations)
+  state/audit.jsonl      # sensitive tool use (MCP, third-party tools, bot_say), rotated
   workspace/             # default working directory
 <its working directory>/.opencode/agents/scout.md   # generated native agent file (do not edit)
 ```
@@ -202,7 +224,8 @@ reply, open the conversation, answer a question or dismiss.
   "model": "anthropic/claude-sonnet-4-5",     // omit = opencode's default model
   "workdir": "/home/me/crm",
   "skills": ["web-research"],                   // allowlist; omit = unrestricted, [] = none
-  "mcps": { "crm": { "type": "local", "command": ["node", "crm-server.js"] } }
+  "mcps": { "crm": { "type": "local", "command": ["node", "crm-server.js"] } },
+  "capabilities": { "preset": "standard" }      // omit = standard; see "Permissions"
 }
 ```
 
@@ -239,13 +262,16 @@ With `debug` off (default) none of this exists: the code is in `src/debug/` and 
   working directory, which needs a **global** install. Diagnose reports it as an error for bots with automations.
 - **Automations do not appear**: needs opencode 2.4+ with automations enabled; Diagnose shows the sync error from the host.
 - **A bot's own MCP servers / local skills are missing**: they are registered only where the plugin runs in the bot's
-  working directory. Install the plugin globally for bots that use them.
+  working directory. Install the plugin globally for bots that use them. Also check **Permissions**: a server not in the
+  `mcps` allowlist is deliberately not registered.
+- **A tool is denied**: check the bot's **Permissions**. `denyTools` wins over `tools` and the preset; `none` and
+  `minimal` deny everything except their allowlist (and `bot_*`). Diagnose prints the effective rules.
 
 ## Develop and test
 
 ```bash
 npm install
-npm test               # build + typecheck (server and TSX) + 68 unit tests; no opencode needed
+npm test               # build + typecheck (server and TSX) + 84 unit tests; no opencode needed
 npm i --no-save @opencode/cli@2.4.1              # ~270 MB binary, for the next two only
 npm run test:e2e       # real opencode server + plugin + scripted mock LLM; no internet needed
                        # (includes a real scheduled automation run, so it takes a few minutes)

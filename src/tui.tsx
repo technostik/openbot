@@ -27,6 +27,7 @@ interface Row {
 
 function BotsSidebar(props: {
   rows: () => Row[]
+  fg: any
   muted: any
   open: (name: string) => void
   openItem: (name: string, id: string) => void
@@ -49,12 +50,12 @@ function BotsSidebar(props: {
             <box flexDirection="column">
               <box flexDirection="row">
                 <box onMouseUp={() => toggle(b.name)}>
-                  <text fg="#000000">{folded()[b.name] ? "▸" : "▾"}</text>
+                  <text fg={props.fg}>{folded()[b.name] ? "▸" : "▾"}</text>
                 </box>
                 <box onMouseUp={() => props.open(b.name)}>
-                  <text fg="#000000">{`@${b.name}`}</text>
+                  <text fg={props.fg}>{`@${b.name}`}</text>
                 </box>
-                <text fg="#000000">{`${b.alerts ? `  !${b.alerts}` : ""}${b.questions ? `  ?${b.questions}` : ""}`}</text>
+                <text fg={props.fg}>{`${b.alerts ? `  !${b.alerts}` : ""}${b.questions ? `  ?${b.questions}` : ""}`}</text>
               </box>
               <Show when={!folded()[b.name] && b.items.length}>
                 <box flexDirection="column" paddingLeft={3}>
@@ -81,17 +82,18 @@ function AlertDialog(props: {
   message: string
   at: string
   level: string
+  fg: any
   muted: any
   onClose: () => void
   onRead: () => void
 }) {
   return (
     <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
-      <text fg="#000000">{`${props.level === "attention" ? "! " : ""}${props.title}`}</text>
+      <text fg={props.fg}>{`${props.level === "attention" ? "! " : ""}${props.title}`}</text>
       <scrollbox height={16}>
-        <text fg="#000000">{props.message}</text>
+        <text fg={props.fg}>{props.message}</text>
       </scrollbox>
-      <text fg="#555555">{props.at}</text>
+      <text fg={props.muted}>{props.at}</text>
       <box flexDirection="row" paddingTop={1} gap={1}>
         <box backgroundColor="#d0d0d0" paddingLeft={2} paddingRight={2} onMouseUp={props.onClose}>
           <text fg="#000000">Close</text>
@@ -193,6 +195,7 @@ const plugin: Plugin.Definition = {
             message={it.message}
             at={it.at}
             level={it.level}
+            fg={context.theme.text.base}
             muted={context.theme.text.muted}
             onClose={close}
             onRead={() => {
@@ -222,7 +225,7 @@ const plugin: Plugin.Definition = {
 
     const unslot = context.ui.slot({
       append: "sidebar.content",
-      render: () => <BotsSidebar rows={rows} muted={context.theme.text.muted} open={(name) => run(() => botMenuFlow(deps, name))} openItem={openItem} />,
+      render: () => <BotsSidebar rows={rows} fg={context.theme.text.base} muted={context.theme.text.muted} open={(name) => run(() => botMenuFlow(deps, name))} openItem={openItem} />,
     })
     return () => {
       clearInterval(timer)

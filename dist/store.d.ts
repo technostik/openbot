@@ -1,4 +1,4 @@
-import { type AutomationSpec, type BotStatus, type BotConfig, type BotInput, type BotPatch, type BotState, type McpServerConfig, type ThreadInfo, type Threads } from "./types.js";
+import { type AutomationSpec, type BotCapabilities, type BotStatus, type BotConfig, type BotInput, type BotPatch, type BotState, type McpServerConfig, type ThreadInfo, type Threads } from "./types.js";
 export declare function validateModel(model: unknown): string;
 export declare function validateSkills(skills: unknown): string[];
 export declare function validateMcps(mcps: unknown): Record<string, McpServerConfig>;
@@ -10,6 +10,12 @@ export declare function validateMcps(mcps: unknown): Record<string, McpServerCon
  */
 export declare function resolveAt(at: string, now?: number): string;
 export declare function validateAutomations(list: unknown): AutomationSpec[];
+/**
+ * Validates the reserved `capabilities` field. Unknown keys are kept: bots
+ * created before v4 may have a free-form object there, and dropping it would
+ * silently rewrite their bot.json.
+ */
+export declare function validateCapabilities(c: unknown): BotCapabilities;
 export interface ListResult {
     bots: BotConfig[];
     problems: {

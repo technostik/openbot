@@ -4,6 +4,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { countAudit, readAudit } from "../audit.js";
+import { describeCapabilities } from "../host.js";
 import { inspectMaterialized, agentFilePath } from "../materialize.js";
 import { materializeEnv } from "../service.js";
 import { loadLocalSkills } from "../skills.js";
@@ -80,6 +82,8 @@ async function diagnoseBot(env, bot, add, shared) {
             return undefined;
         }
     };
+    const local = loadLocalSkills(store.skillsDir(s));
+    const caps = describeCapabilities(bot, local.map((l) => l.name));
     // master prompt
     const sys = store.systemPath(s);
     if (!fs.existsSync(sys))
@@ -100,6 +104,20 @@ async function diagnoseBot(env, bot, add, shared) {
         add({ scope: s, id: "model", level: "ok", title: `No own model: uses the default (${shared.defaultModel})` });
     else
         add({ scope: s, id: "model", level: "error", title: "No model: the bot has none and opencode has no default", detail: "A run would wait forever / fail.", fix: "Give the bot a model (bot_update model: \"provider/model\")." });
+    // permissions (effective, after the preset and explicit lists)
+    const permissionDetail = [
+        caps.tools === "*" ? "tools: all" : `tools: ${caps.tools.join(", ")}`,
+        `MCP: ${caps.mcpHosts.length ? caps.mcpHosts.join(", ") : "none"}`,
+        ...(caps.deniedMcps.length ? [`denied MCP: ${caps.deniedMcps.join(", ")}`] : []),
+        caps.skills === "*" ? "skills: all" : caps.skills === "none" ? "skills: none" : `skills: ${caps.skills.join(", ")}`,
+        ...(caps.denyTools.length ? [`denied tools: ${caps.denyTools.join(", ")}`] : []),
+        ...(caps.unknownMcps.length ? [`unknown MCP names: ${caps.unknownMcps.join(", ")}`] : []),
+    ].join("; ");
+    add({ scope: s, id: "permissions", level: "info", title: `Permissions: preset ${caps.preset}`, detail: permissionDetail });
+    if (caps.denyTools.some((t) => t === "*" || t === "bot_*"))
+        add({ scope: s, id: "permissions-self", level: "warn", title: "Permissions deny the bot_* tools: the bot cannot manage itself", fix: 'Remove "*" or "bot_*" from denyTools.' });
+    if (caps.unknownMcps.length)
+        add({ scope: s, id: "permissions-mcp", level: "warn", title: `MCP allowlist names not configured on this bot: ${caps.unknownMcps.join(", ")}`, fix: "Use a key of the bot's mcps (or a host name)." });
     // working directory
     if (!fs.existsSync(bot.workdir))
         add({ scope: s, id: "workdir", level: "error", title: "Working directory does not exist", detail: bot.workdir, fix: "Create it, or bot_update workdir." });
@@ -146,11 +164,13 @@ async function diagnoseBot(env, bot, add, shared) {
     }
     else
         add({ scope: s, id: "skills", level: "info", title: "Skills: unrestricted" });
-    const local = loadLocalSkills(store.skillsDir(s));
     if (local.length)
         add({ scope: s, id: "local-skills", level: "ok", title: `Local skills: ${local.map((l) => l.name).join(", ")}` });
-    // MCP
-    const servers = Object.entries(bot.mcps ?? {});
+    // MCP: only the servers the permissions allow are registered, so only check those.
+    const allowedServers = new Set(caps.mcps);
+    const servers = Object.entries(bot.mcps ?? {}).filter(([name]) => allowedServers.has(name));
+    for (const name of caps.deniedMcps)
+        add({ scope: s, id: `mcp-denied:${name}`, level: "info", title: `MCP "${name}" is configured but not allowed by the permissions`, detail: "It is not registered for this bot." });
     if (servers.length) {
         const live = await safe(() => env.mcpAt(bot.workdir));
         for (const [name, cfg] of servers) {
@@ -205,6 +225,11 @@ async function diagnoseBot(env, bot, add, shared) {
     }
     catch {
         add({ scope: s, id: "history", level: "info", title: "History: nothing recorded yet" });
+    }
+    const audited = countAudit(store, s);
+    if (audited) {
+        const recent = readAudit(store, s, 3);
+        add({ scope: s, id: "audit", level: "info", title: `Audit log: ${audited} entr${audited === 1 ? "y" : "ies"}`, detail: recent.map((r) => `${r.at} ${r.tool}${r.target ? " -> " + r.target : ""}`).join("; ") });
     }
     // conversations and their last outcome
     const threads = store.listThreads(s);

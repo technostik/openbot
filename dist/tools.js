@@ -3,15 +3,17 @@
  * configure, inspect and talk to bots. All are native tools (not Code Mode),
  * so any model can call them directly.
  */
+import { recordAudit } from "./audit.js";
 import { describeAutomations, standardPrompt } from "./automation.js";
 import { exportToFile } from "./bundle.js";
+import { describeCapabilities } from "./host.js";
 import { readRecorded, renderTranscript, listRecorded, syncHistory } from "./history.js";
 import { addInboxItem, openItems } from "./inbox.js";
 import { listTree, readInside, renderTree } from "./files.js";
 import { inspectMaterialized, agentFilePath } from "./materialize.js";
 import { say, summarizeMessages } from "./session-io.js";
 import { createBot, deleteBot, importBot, materializeEnv, updateBot } from "./service.js";
-import { BotError, BOT_STATUSES } from "./types.js";
+import { BotError, BOT_STATUSES, CAPABILITY_PRESETS } from "./types.js";
 import { validateAutomations } from "./store.js";
 import { expandPath } from "./paths.js";
 /** Turns host errors into something that tells the user what to do. */
@@ -33,6 +35,17 @@ const AUTOMATIONS_SCHEMA = {
     description: 'Scheduled runs: [{ "id": "daily-scan", "every": "6 hours" | "cron": "0 9 * * 1-5" | "at": "in 10 minutes", "prompt": "extra instructions", "enabled": true }]. Exactly one of every/cron/at.',
     items: { type: "object", additionalProperties: true },
 };
+const CAPABILITIES_SCHEMA = {
+    type: "object",
+    description: 'Per-bot permissions. preset: "none" | "minimal" | "standard" | "full" (default "standard"). tools and denyTools hold opencode permission actions (read, edit, shell, glob, grep, webfetch, "bot_*", "<mcp-server>_<tool>", ...; "*" = all). mcps lists the bot\'s MCP server names (keys of mcps, or host names "<bot>-<server>"; "*" = all). Explicit lists override the preset; denyTools always wins.',
+    properties: {
+        preset: { type: "string", enum: [...CAPABILITY_PRESETS] },
+        tools: { type: "array", items: { type: "string" }, description: 'Allowed tool actions; ["*"] = all.' },
+        denyTools: { type: "array", items: { type: "string" }, description: "Denied tool actions; wins over tools and the preset." },
+        mcps: { type: "array", items: { type: "string" }, description: 'Allowed MCP server names; ["*"] = all.' },
+    },
+    additionalProperties: true,
+};
 const str = (description) => ({ type: "string", description });
 function publicView(bot, store) {
     return {
@@ -41,6 +54,7 @@ function publicView(bot, store) {
         systemPromptFile: store.systemPath(bot.name),
         agentFile: agentFilePath(bot),
         agentFileState: inspectMaterialized(bot, materializeEnv(store)),
+        permissions: describeCapabilities(bot),
         mcps: bot.mcps
             ? Object.fromEntries(Object.entries(bot.mcps).map(([k, v]) => [k, v.type === "local" ? { type: "local", command: v.command } : { type: "remote", url: v.url }]))
             : undefined,
@@ -94,7 +108,7 @@ export function buildTools(deps) {
         },
         {
             name: "bot_get",
-            description: "Show a bot's full configuration (instructions, model, workdir, skills, MCP servers) and its conversation stats. Without a name, shows the calling bot itself.",
+            description: "Show a bot's full configuration (instructions, model, workdir, skills, MCP servers, effective permissions) and its conversation stats. Without a name, shows the calling bot itself.",
             input: { type: "object", properties: { name: str("Bot name (optional when called by a bot: defaults to itself)") } },
             options: { codemode: false },
             execute: wrap(async (input, ctx) => {
@@ -125,7 +139,7 @@ export function buildTools(deps) {
         },
         {
             name: "bot_create",
-            description: "Create a bot: a named agent with a role (instructions), a model, a working directory, optional skills allowlist and MCP servers. Afterwards it can be addressed with @name or bot_say.",
+            description: "Create a bot: a named agent with a role (instructions), a model, a working directory, optional skills allowlist, MCP servers and per-bot permissions. Afterwards it can be addressed with @name or bot_say.",
             input: {
                 type: "object",
                 properties: {
@@ -136,6 +150,7 @@ export function buildTools(deps) {
                     workdir: str("Directory where the bot works (default: a private workspace inside the bot folder)"),
                     skills: { type: "array", items: { type: "string" }, description: "Allowlist of skill names the bot may use. Omit for no restriction; [] for none." },
                     mcps: MCP_SCHEMA,
+                    capabilities: CAPABILITIES_SCHEMA,
                     automations: AUTOMATIONS_SCHEMA,
                 },
                 required: ["name", "instructions"],
@@ -150,7 +165,7 @@ export function buildTools(deps) {
         },
         {
             name: "bot_update",
-            description: "Change a bot's configuration. Only the fields you pass are changed; pass null to clear an optional field. A bot can call this on itself (omit name) to reconfigure itself; it cannot modify other bots.",
+            description: "Change a bot's configuration (instructions, model, workdir, skills, MCP servers, permissions, automations). Only the fields you pass are changed; pass null to clear an optional field. A bot can call this on itself (omit name) to reconfigure itself, but it cannot modify other bots or change permissions.",
             input: {
                 type: "object",
                 properties: {
@@ -161,6 +176,7 @@ export function buildTools(deps) {
                     workdir: str("New working directory (a new conversation is started there)"),
                     skills: { type: ["array", "null"], items: { type: "string" }, description: "New skills allowlist, [] for none, null for unrestricted" },
                     mcps: { ...MCP_SCHEMA, type: ["object", "null"] },
+                    capabilities: { ...CAPABILITIES_SCHEMA, type: ["object", "null"], description: `${CAPABILITIES_SCHEMA.description} Pass null to remove all overrides (standard preset).` },
                     automations: { ...AUTOMATIONS_SCHEMA, type: ["array", "null"] },
                 },
             },
@@ -170,6 +186,8 @@ export function buildTools(deps) {
                 authorizeWrite(name, ctx);
                 const { name: _n, ...rest } = input;
                 const patch = rest;
+                if (isBot(ctx.agent) && patch.capabilities !== undefined)
+                    throw new BotError("A bot cannot change permissions (capabilities): ask the user.");
                 if (!Object.keys(patch).length)
                     throw new BotError("Nothing to change: pass at least one field.");
                 if (patch.workdir)
@@ -234,6 +252,13 @@ export function buildTools(deps) {
                         fresh: input.new_conversation === true,
                         callerSessionID: ctx.sessionID || undefined,
                         timeoutMs: (typeof input.timeout_seconds === "number" ? input.timeout_seconds : 300) * 1000,
+                    });
+                    // bot_say is the sensitive bot-to-bot path: audit it even though it is a bot_* tool.
+                    await recordAudit(store, caller ?? bot.name, {
+                        tool: "bot_say",
+                        sessionID: r.sessionID,
+                        target: bot.name,
+                        ...(caller ? {} : { detail: "called by a human agent" }),
                     });
                     const meta = { bot: bot.name, sessionID: r.sessionID, thread: r.thread, status: r.status };
                     if (r.status === "started")

@@ -10,14 +10,14 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { composeSystem, skillRules } from "./host.js";
+import { capabilityRules, composeSystem } from "./host.js";
 import { loadLocalSkills } from "./skills.js";
 export const MARKER = "x-openbot: managed";
 export const agentFilePath = (bot) => path.join(bot.workdir, ".opencode", "agents", `${bot.name}.md`);
 const q = (v) => JSON.stringify(v);
 export function renderAgentFile(bot, env) {
     const local = loadLocalSkills(env.skillsDir(bot.name)).map((s) => s.name);
-    const rules = skillRules(bot, local);
+    const rules = capabilityRules(bot, local);
     const front = [
         "---",
         ...(bot.description ? [`description: ${q(bot.description)}`] : []),

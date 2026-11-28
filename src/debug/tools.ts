@@ -22,7 +22,7 @@ export function buildDebugTools(deps: DebugToolDeps): ToolDef[] {
     {
       name: "bot_diagnose",
       description:
-        "Check that everything bots need is configured (model, master prompt, working directory, agent, skills, MCP, last run) and explain how to fix what is not. With ping:true it also sends a real test message to the bot. With report:true it writes a full markdown report and returns its path.",
+        "Check that everything bots need is configured (model, master prompt, working directory, agent, permissions, skills, MCP, audit, last run) and explain how to fix what is not. With ping:true it also sends a real test message to the bot. With report:true it writes a full markdown report and returns its path.",
       input: {
         type: "object",
         properties: {

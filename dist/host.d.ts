@@ -1,4 +1,4 @@
-import type { BotConfig } from "./types.js";
+import { type BotConfig, type CapabilityPreset } from "./types.js";
 export interface Permission {
     action: string;
     resource: string;
@@ -56,6 +56,51 @@ export declare const skillHostId: (bot: string, skill: string) => string;
  * "<bot>.<name>") are allowed by id as well as by name.
  */
 export declare function skillRules(bot: BotConfig, localSkillNames: string[]): Permission[];
+export type ToolMode = "all" | "list";
+export type SkillMode = "all" | "bot" | "none";
+/** The effective permissions of a bot, after the preset and the explicit lists. */
+export interface ResolvedCapabilities {
+    preset: CapabilityPreset;
+    /** "all" = no blanket deny; "list" = deny everything then allow `tools`. */
+    toolMode: ToolMode;
+    /** Explicitly allowed tool actions (empty when toolMode is "all"). */
+    tools: string[];
+    denyTools: string[];
+    /** Allowed MCP server keys (keys of bot.mcps). */
+    mcps: string[];
+    /** Configured MCP servers that the permissions do not allow. */
+    deniedMcps: string[];
+    /** Allowlist entries that match no configured MCP server. */
+    unknownMcps: string[];
+    skills: SkillMode;
+}
+/**
+ * Applies a bot's preset, then its explicit `tools` / `denyTools` / `mcps`
+ * lists. `denyTools` is kept separate because it is applied last, when rules
+ * are emitted.
+ */
+export declare function resolveCapabilities(bot: BotConfig, _localSkillNames?: string[]): ResolvedCapabilities;
+/** A compact, human-readable view of the effective permissions. */
+export interface CapabilitySummary {
+    preset: CapabilityPreset;
+    /** "*" = all tools, otherwise the allowed actions (including `bot_*`). */
+    tools: "*" | string[];
+    denyTools: string[];
+    mcps: string[];
+    mcpHosts: string[];
+    deniedMcps: string[];
+    unknownMcps: string[];
+    /** "*" = all skills, "none" = no skills, otherwise the allowed names. */
+    skills: "*" | "none" | string[];
+}
+export declare function describeCapabilities(bot: BotConfig, localSkillNames?: string[]): CapabilitySummary;
+/**
+ * Every permission rule a bot's capabilities imply: tools, MCP servers and
+ * skills, in evaluation order (later rules win). A bot without `capabilities`
+ * gets exactly the old skill allowlist and no tool rules, so its behavior is
+ * unchanged.
+ */
+export declare function capabilityRules(bot: BotConfig, localSkillNames?: string[]): Permission[];
 export interface ApplyEnv {
     /** Where a bot's own skills live on disk. */
     skillsDir: (bot: string) => string;

@@ -1,8 +1,3 @@
-/**
- * The bot_* tools: how users (through any agent) and bots themselves create,
- * configure, inspect and talk to bots. All are native tools (not Code Mode),
- * so any model can call them directly.
- */
 import { type NativeAutomations, type ReconcileReport } from "./automation.js";
 import { type SessionPort } from "./session-io.js";
 import { type Service } from "./service.js";

@@ -8,6 +8,7 @@
  * servers and skills, and bot_* tools to create, configure, inspect and talk to bots.
  */
 import type { Plugin } from "@opencode/plugin"
+import { isAuditableTool, recordAudit } from "./audit.js"
 import { MARKER_AGENT } from "./constants.js"
 import { reconcile, type NativeAutomations } from "./automation.js"
 import { createDebugLog } from "./debug/log.js"
@@ -100,6 +101,20 @@ const openbot: Plugin.Plugin = {
       }))
     }
     disposers.push(await ctx.tool.transform((ed: any) => { for (const tool of tools) ed.add(tool) }))
+
+    // Audit the sensitive tools a bot uses: MCP servers and third-party plugin
+    // tools. bot_say records itself (it is a bot_* tool, excluded here).
+    disposers.push(
+      await ctx.tool.hook("execute.after", async (e) => {
+        if (!store.exists(e.agent) || !isAuditableTool(e.tool)) return
+        await recordAudit(store, e.agent, {
+          tool: e.tool,
+          sessionID: e.sessionID,
+          ...(e.codemode ? { codemode: true } : {}),
+          ...(e.status === "error" ? { detail: e.error?.message ? `failed: ${e.error.message}` : "failed" } : {}),
+        })
+      }),
+    )
 
     // `@bot ...` in the user's prompt becomes an instruction to hand the message to the bot.
     disposers.push(

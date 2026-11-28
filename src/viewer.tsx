@@ -3,7 +3,7 @@
 import type { Plugin } from "@opencode/plugin/tui"
 import { useKeyboard } from "@opentui/solid"
 
-function Viewer(props: { title: string; text: string; muted: any }) {
+function Viewer(props: { title: string; text: string; fg: any; muted: any }) {
   let box: any
   useKeyboard((e) => {
     if (!box) return
@@ -17,9 +17,9 @@ function Viewer(props: { title: string; text: string; muted: any }) {
   })
   return (
     <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
-      <text>{props.title}</text>
+      <text fg={props.fg}>{props.title}</text>
       <scrollbox ref={(el: any) => (box = el)} focused height={24}>
-        <text>{props.text}</text>
+        <text fg={props.fg}>{props.text}</text>
       </scrollbox>
       <text fg={props.muted}>{"Up/Down or j/k: line. Space/b or PgDn/PgUp: page. g/G or Home/End: top/bottom. Esc: close."}</text>
     </box>
@@ -29,6 +29,6 @@ function Viewer(props: { title: string; text: string; muted: any }) {
 export function showViewer(ctx: Plugin.Context, title: string, text: string): Promise<void> {
   return new Promise((resolve) => {
     ctx.ui.dialog.set({ size: "xlarge" })
-    ctx.ui.dialog.show(() => <Viewer title={title} text={text} muted={ctx.theme.text.muted} />, () => resolve())
+    ctx.ui.dialog.show(() => <Viewer title={title} text={text} fg={ctx.theme.text.base} muted={ctx.theme.text.muted} />, () => resolve())
   })
 }
