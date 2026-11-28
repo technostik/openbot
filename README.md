@@ -74,7 +74,9 @@ export automatically. Restart opencode (or `/reload`) after editing the config.
   - **Working directory** and **Bot folder** (`system.md`, `state.md`, history, inbox): browse folders and read whole files
     in a scrollable viewer (arrows or `j`/`k`, Space/`b` for pages, `g`/`G` for top/bottom, Esc to close).
   - **Model**, **Permissions**, **Audit log**, **Configuration**, **Delete**; and with `debug`: **Diagnose**, **Generate report**.
-- The sidebar marks each bot: `[stopped]`, `!n` alerts waiting, `?n` questions waiting. New alerts raise a toast (and for
+- The sidebar shows each bot as `@name (actif|arrêté|terminé|en attente)`, plus `!n` open alerts and `?n` questions.
+  `en attente` is shown instead of the lifecycle label while a question is waiting for your answer; it is not stored
+  (automations still follow `active` / `stopped` / `finished`). New alerts raise a toast (and for
   `attention`: a desktop notification, a sound and the terminal bell). `Ctrl+P` → **Bots: inbox** (or `/bot-inbox`).
 
 **In a prompt**

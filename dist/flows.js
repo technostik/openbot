@@ -39,6 +39,21 @@ export const clientPort = (client) => ({
     list: (i) => client.session.list(i),
 });
 const statusTag = (b) => ((b.status ?? "active") === "active" ? "" : ` [${b.status}]`);
+/** Words shown in parentheses in the sidebar. French, because that is what the sidebar is read in. */
+const SIDEBAR_STATUS = {
+    active: "actif",
+    stopped: "arrêté",
+    finished: "terminé",
+    waiting: "en attente",
+};
+/**
+ * Sidebar parenthesis. A pending question (the bot needs an answer) wins over the
+ * lifecycle status. Not persisted: automations keep following active/stopped/finished.
+ */
+export function sidebarStatus(status, questions) {
+    const key = questions > 0 ? "waiting" : status || "active";
+    return SIDEBAR_STATUS[key] ?? key;
+}
 /** Model picker. Resolves to "" for opencode's default, a "provider/model" id, or undefined when cancelled. */
 export async function pickModel(d, title, current) {
     const options = [{ title: "Default model", value: "", description: "use whatever opencode uses by default" }];

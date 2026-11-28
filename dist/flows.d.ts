@@ -16,6 +16,11 @@ export interface FlowDeps {
 }
 /** The TUI's client, shaped like the session API the server side uses. */
 export declare const clientPort: (client: any) => SessionPort;
+/**
+ * Sidebar parenthesis. A pending question (the bot needs an answer) wins over the
+ * lifecycle status. Not persisted: automations keep following active/stopped/finished.
+ */
+export declare function sidebarStatus(status: string | undefined, questions: number): string;
 /** Model picker. Resolves to "" for opencode's default, a "provider/model" id, or undefined when cancelled. */
 export declare function pickModel(d: FlowDeps, title: string, current?: string): Promise<string | undefined>;
 export declare function createBotFlow(d: FlowDeps): Promise<void>;

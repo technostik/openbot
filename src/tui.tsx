@@ -9,7 +9,7 @@
 import type { Plugin } from "@opencode/plugin/tui"
 import { For, Show, createSignal, onCleanup } from "solid-js"
 import { debugEnabled } from "../dist/debug/enabled.js"
-import { botMenuFlow, botsFlow, createBotFlow, diagnoseFlow, fieldText, inboxFlow, pendingQuestions, type FlowDeps } from "../dist/flows.js"
+import { botMenuFlow, botsFlow, createBotFlow, diagnoseFlow, fieldText, inboxFlow, pendingQuestions, sidebarStatus, type FlowDeps } from "../dist/flows.js"
 import { openItems, updateInboxItem } from "../dist/inbox.js"
 import { resolveRoot } from "../dist/paths.js"
 import { makeService } from "../dist/service.js"
@@ -53,7 +53,7 @@ function BotsSidebar(props: {
                   <text fg={props.fg}>{folded()[b.name] ? "▸" : "▾"}</text>
                 </box>
                 <box onMouseUp={() => props.open(b.name)}>
-                  <text fg={props.fg}>{`@${b.name}`}</text>
+                  <text fg={props.fg}>{`@${b.name} (${b.status})`}</text>
                 </box>
                 <text fg={props.fg}>{`${b.alerts ? `  !${b.alerts}` : ""}${b.questions ? `  ?${b.questions}` : ""}`}</text>
               </box>
@@ -160,18 +160,19 @@ const plugin: Plugin.Definition = {
       setRows(
         bots.map((b) => {
           const items = openItems(store, b.name)
+          const nq = questions.filter((q) => q.bot === b.name).length
           return {
             name: b.name,
             model: b.model ?? "default model",
-            status: b.status ?? "active",
+            status: sidebarStatus(b.status, nq),
             alerts: items.length,
-            questions: questions.filter((q) => q.bot === b.name).length,
+            questions: nq,
             items: items.map((it) => ({ id: it.id, title: it.title ?? it.message.slice(0, 48), level: it.level })),
           }
         }),
       )
     }
-    setRows(store.list().map((b) => ({ name: b.name, model: b.model ?? "default model", status: b.status ?? "active", alerts: 0, questions: 0, items: [] })))
+    setRows(store.list().map((b) => ({ name: b.name, model: b.model ?? "default model", status: sidebarStatus(b.status, 0), alerts: 0, questions: 0, items: [] })))
     void tick().catch(() => {})
     const timer = setInterval(() => void tick().catch(() => {}), 2500)
 

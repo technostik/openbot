@@ -9,7 +9,7 @@ import { addInboxItem, readInbox, updateInboxItem, openItems } from "../dist/inb
 import { syncHistory, readRecorded, listRecorded, renderTranscript, historyFile } from "../dist/history.js"
 import { AUTO_PREFIX, nativeName, standardPrompt, toNativeInput, sameAutomation, reconcile, describeAutomations, isScheduled } from "../dist/automation.js"
 import { buildStateContext, addToSection } from "../dist/memory.js"
-import { fieldText } from "../dist/flows.js"
+import { fieldText, sidebarStatus } from "../dist/flows.js"
 import { composeSystem } from "../dist/host.js"
 import { say } from "../dist/session-io.js"
 import { diagnose } from "../dist/debug/diagnose.js"
@@ -243,6 +243,16 @@ test("state.md: addToSection puts lines in the right section, drops placeholders
 test("tui: a question field reads the host's shape (text in description, header in title)", () => {
   assert.equal(fieldText({ key: "q0", title: "Pick", description: "Which podcast first?" }), "Which podcast first?")
   assert.equal(fieldText({ title: "Pick" }), "Pick"); assert.equal(fieldText({}), "(question)")
+})
+
+test("sidebar: lifecycle label, and waiting overrides it while a question needs an answer", () => {
+  assert.equal(sidebarStatus(undefined, 0), "actif")
+  assert.equal(sidebarStatus("active", 0), "actif")
+  assert.equal(sidebarStatus("stopped", 0), "arrêté")
+  assert.equal(sidebarStatus("finished", 0), "terminé")
+  assert.equal(sidebarStatus("active", 2), "en attente")
+  assert.equal(sidebarStatus("stopped", 1), "en attente")
+  assert.equal(sidebarStatus("custom", 0), "custom")
 })
 
 test("diagnose: status, state, automations, plugin-not-loaded-in-workdir, inbox, history", async () => {
